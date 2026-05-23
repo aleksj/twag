@@ -1,0 +1,23 @@
+[Unit]
+Description=TWAG Nimble process (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=/etc/twag/twag.env
+ExecStart=__APP_DIR__/deploy/ubuntu/run-nimble.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=__APP_DIR__
+
+[Install]
+WantedBy=multi-user.target

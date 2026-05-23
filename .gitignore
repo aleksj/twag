@@ -1,0 +1,15 @@
+.env
+.venv/
+.DS_Store
+.telegram-agent.lock
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.log
+deploy/ubuntu/rsync.privileged.sh
+dist/
+build/
+*.egg-info/

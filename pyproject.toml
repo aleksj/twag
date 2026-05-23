@@ -1,0 +1,27 @@
+[project]
+name = "twag-clickhouse-system"
+version = "0.1.0"
+description = "Small Python ClickHouse integration with CLI health checks and query helpers."
+requires-python = ">=3.10"
+dependencies = [
+  "clickhouse-connect>=0.8.0",
+  "fastapi>=0.115.0",
+  "python-dotenv>=1.0.1",
+  "uvicorn>=0.30.0",
+]
+
+[project.scripts]
+twag = "twag_clickhouse.cli:main"
+twag-clickhouse = "twag_clickhouse.cli:main"
+twag-nytw-tool-server = "twag_clickhouse.tool_server:main"
+twag-telegram-agent = "twag_clickhouse.telegram_agent:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
