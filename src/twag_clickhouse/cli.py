@@ -224,23 +224,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Ask the Subconscious-backed NY Tech Week ClickHouse agent a question",
+        help="Ask the Subconscious-backed agent, using Senso by default and ClickHouse for NYTW events",
     )
     agent_parser.add_argument(
         "question",
         nargs="?",
-        help="Question to answer from nytw_* tables. Omit to start a dialogue.",
+        help="Question to answer from Senso or nytw_* tables. Omit to start a dialogue.",
     )
     agent_parser.set_defaults(func=ask_nytw_agent)
 
     ask_agent_parser = subparsers.add_parser(
         "ask-nytw-agent",
-        help="Ask the Subconscious-backed NY Tech Week ClickHouse agent a question",
+        help="Ask the Subconscious-backed agent, using Senso by default and ClickHouse for NYTW events",
     )
     ask_agent_parser.add_argument(
         "question",
         nargs="?",
-        help="Question to answer from nytw_* tables. Omit to start a dialogue.",
+        help="Question to answer from Senso or nytw_* tables. Omit to start a dialogue.",
     )
     ask_agent_parser.set_defaults(func=ask_nytw_agent)
 

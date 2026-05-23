@@ -136,11 +136,13 @@ The loader creates these tables:
 - `nytw_event_hosts`
 - `nytw_manifest`
 
-### Subconscious NY Tech Week Agent
+### Subconscious Agent
 
-The `twag agent` command runs a Subconscious-backed agent that can answer
-questions by querying the remote ClickHouse `nytw_*` tables. It loads
-Subconscious and ClickHouse credentials from `.env`.
+The `twag agent` command runs a Subconscious-backed agent. Senso is the default
+knowledge path when `SENSO_API_KEY` is configured: ordinary company/product/
+policy questions are answered from the Senso knowledge base with source
+citations. NY Tech Week event questions still use the remote ClickHouse
+`nytw_*` tables.
 
 Required environment:
 
@@ -148,13 +150,23 @@ Required environment:
 SUBCONSCIOUS_API_KEY=your-subconscious-key
 SUBCONSCIOUS_MODEL=subconscious/tim-qwen3.6-27b
 
+SENSO_API_KEY=your-senso-key
+SENSO_BASE_URL=https://sdk.senso.ai/api/v1
+SENSO_MAX_RESULTS=5
+
 CLICKHOUSE_HOST=your-clickhouse-host
 CLICKHOUSE_USERNAME=default
 CLICKHOUSE_PASSWORD=your-clickhouse-password
 CLICKHOUSE_DATABASE=default
 ```
 
-Ask a question:
+Ask a Senso-backed knowledge question:
+
+```bash
+twag agent "What is our refund policy?"
+```
+
+Ask a ClickHouse-backed NY Tech Week question:
 
 ```bash
 twag agent "Which neighborhoods have the most live AI events?"
@@ -170,7 +182,7 @@ twag agent
 > exit
 ```
 
-The ClickHouse tool accepts only single-statement read-only SQL
+The ClickHouse event tool accepts only single-statement read-only SQL
 (`SELECT`, `WITH`, `SHOW`, `DESCRIBE`, or `EXPLAIN`) and requires NYTW queries
 to reference one of the `nytw_*` tables.
 
@@ -189,6 +201,9 @@ TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 TELEGRAM_ALLOWED_CHAT_IDS=
 TELEGRAM_CLEAR_WEBHOOK_ON_POLL=true
 TELEGRAM_POLL_TIMEOUT=30
+TELEGRAM_REQUEST_TIMEOUT=45
+TELEGRAM_RETRY_INITIAL_SECONDS=2
+TELEGRAM_RETRY_MAX_SECONDS=60
 ```
 
 Leave `TELEGRAM_ALLOWED_CHAT_IDS` empty to answer every Telegram user. To
@@ -247,6 +262,11 @@ more
 
 The bot will push back on subjective prompts such as "best event" or "what
 should I do?" Ask with criteria instead.
+
+Telegram network timeouts are treated as transient. The bot retries with
+exponential backoff using `TELEGRAM_RETRY_INITIAL_SECONDS` and
+`TELEGRAM_RETRY_MAX_SECONDS`. Keep `TELEGRAM_REQUEST_TIMEOUT` higher than
+`TELEGRAM_POLL_TIMEOUT`.
 
 ### Troubleshooting
 
@@ -355,6 +375,10 @@ REMOTE_DIR=/home/ubuntu/twag
 SSH_PORT=22
 ```
 
+Use a persistent directory such as `/home/ubuntu/twag` or `/opt/twag`. Do not
+use `/tmp/twag` for systemd services; `/tmp` can be cleaned by the OS and
+systemd will fail before the Python process starts.
+
 Then sync:
 
 ```bash
@@ -433,6 +457,15 @@ Follow one service:
 ```bash
 journalctl -u twag-telegram-agent@$USER.service -f
 journalctl -u twag-nimble@$USER.service -f
+```
+
+If you see `Failed to set up mount namespacing: /tmp/twag: No such file or
+directory`, the service was installed from a temporary app directory. Resync to
+a persistent directory and rerun the installer:
+
+```bash
+REMOTE_DIR=/opt/twag RUN_REMOTE_INSTALL=true deploy/ubuntu/rsync.privileged.sh
+ssh root@your-private-or-public-ubuntu-ip 'systemctl daemon-reload && systemctl restart twag-telegram-agent@root.service twag-nimble@root.service'
 ```
 
 Useful ClickHouse queries:

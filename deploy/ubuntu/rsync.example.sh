@@ -6,7 +6,7 @@ set -euo pipefail
 
 REMOTE_USER="${REMOTE_USER:-ubuntu}"
 REMOTE_HOST="${REMOTE_HOST:-203.0.113.10}"
-REMOTE_DIR="${REMOTE_DIR:-/home/ubuntu/twag}"
+REMOTE_DIR="${REMOTE_DIR:-/home/$REMOTE_USER/twag}"
 SSH_PORT="${SSH_PORT:-22}"
 RUN_REMOTE_INSTALL="${RUN_REMOTE_INSTALL:-false}"
 

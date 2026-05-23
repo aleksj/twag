@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from twag_clickhouse.subconscious_agent import (
+    NytwSubconsciousAgent,
+    SubconsciousConfig,
     UnsafeQueryError,
     add_default_limit,
     build_keyword_event_query,
@@ -10,6 +12,8 @@ from twag_clickhouse.subconscious_agent import (
     expanded_keyword_terms,
     format_event_rows,
     is_more_results_request,
+    likely_event_list_question,
+    likely_nytw_data_question,
     looks_like_planning_leak,
     requested_event_limit,
     validate_nytw_query,
@@ -91,6 +95,19 @@ def test_is_more_results_request() -> None:
     assert not is_more_results_request("more running events")
 
 
+def test_likely_nytw_data_question_detects_event_data_requests() -> None:
+    assert likely_nytw_data_question("How many NY Tech Week events are in SoHo?")
+    assert likely_nytw_data_question("How many events are in SoHo?")
+    assert not likely_nytw_data_question("What is our refund policy?")
+    assert not likely_nytw_data_question("What is our refund policy for events?")
+
+
+def test_likely_event_list_question_requires_event_search_intent() -> None:
+    assert likely_event_list_question("list events involving running")
+    assert likely_event_list_question("top 3 AI events")
+    assert not likely_event_list_question("What is our refund policy for events?")
+
+
 def test_format_event_rows_is_deterministic_and_preserves_url() -> None:
     output = format_event_rows(
         {
@@ -116,3 +133,48 @@ def test_format_event_rows_is_deterministic_and_preserves_url() -> None:
 
 def test_format_event_rows_handles_empty_followup_page() -> None:
     assert format_event_rows({"ok": True, "rows": []}, offset=5) == "No more matching events found."
+
+
+class FakeClickHouse:
+    def query(self, sql: str) -> list[dict[str, str]]:
+        raise AssertionError(f"ClickHouse should not be called for Senso-default questions: {sql}")
+
+
+class FakeSenso:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def search(self, query: str) -> dict[str, object]:
+        self.queries.append(query)
+        return {
+            "answer": "Customers can request a full refund within 30 days.",
+            "results": [{"title": "Refund Policy", "score": 0.96}],
+        }
+
+
+def test_agent_uses_senso_by_default_for_non_nytw_questions() -> None:
+    senso = FakeSenso()
+    agent = NytwSubconsciousAgent(
+        clickhouse=FakeClickHouse(),  # type: ignore[arg-type]
+        subconscious=SubconsciousConfig(api_key="test"),
+        senso=senso,  # type: ignore[arg-type]
+    )
+
+    answer = agent.ask("What is our refund policy for events?")
+
+    assert senso.queries == ["What is our refund policy for events?"]
+    assert "full refund within 30 days" in answer
+    assert "Sources: Refund Policy (0.96)" in answer
+
+
+def test_agent_from_env_does_not_require_clickhouse_for_senso_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBCONSCIOUS_API_KEY", "subconscious-test")
+    monkeypatch.setenv("SENSO_API_KEY", "senso-test")
+    monkeypatch.delenv("CLICKHOUSE_HOST", raising=False)
+    monkeypatch.delenv("CLICKHOUSE_PASSWORD", raising=False)
+    monkeypatch.delenv("CLICKHOUSE_API_KEY", raising=False)
+
+    agent = NytwSubconsciousAgent.from_env()
+
+    assert agent.clickhouse is None
+    assert agent.senso is not None

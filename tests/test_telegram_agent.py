@@ -1,5 +1,12 @@
+import os
+import urllib.error
+from unittest.mock import patch
+
 from twag_clickhouse.telegram_agent import (
     SUBJECTIVE_QUESTION_REPLY,
+    TelegramAgentConfig,
+    TelegramApi,
+    TelegramTransientError,
     answer_message,
     is_subjective_question,
     message_text,
@@ -40,7 +47,7 @@ def test_answer_message_returns_greeting_for_start():
             raise AssertionError("agent should not be called for /start")
 
     assert answer_message(Agent(), {}, 123, "/start") == (
-        "Hi, I'm a bot that will answer questions about TechWeek NY events!"
+        "Hi, I'm a bot that answers from Senso by default and uses ClickHouse for TechWeek NY event data."
     )
 
 
@@ -56,3 +63,36 @@ def test_answer_message_ridicules_subjective_questions_without_agent_call():
             raise AssertionError("agent should not be called for subjective questions")
 
     assert answer_message(Agent(), {}, 123, "best event?") == SUBJECTIVE_QUESTION_REPLY
+
+
+def test_telegram_config_reads_retry_settings():
+    env = {
+        "TELEGRAM_BOT_TOKEN": "token",
+        "TELEGRAM_POLL_TIMEOUT": "20",
+        "TELEGRAM_REQUEST_TIMEOUT": "35",
+        "TELEGRAM_RETRY_INITIAL_SECONDS": "3",
+        "TELEGRAM_RETRY_MAX_SECONDS": "30",
+    }
+
+    with patch.dict(os.environ, env, clear=True):
+        config = TelegramAgentConfig.from_env()
+
+    assert config.poll_timeout == 20
+    assert config.request_timeout == 35
+    assert config.retry_initial == 3
+    assert config.retry_max == 30
+
+
+def test_telegram_api_timeout_is_transient():
+    api = TelegramApi("token", request_timeout=1)
+
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.URLError(TimeoutError("Operation timed out")),
+    ):
+        try:
+            api.request("getMe")
+        except TelegramTransientError as exc:
+            assert "timed out" in str(exc)
+        else:
+            raise AssertionError("expected TelegramTransientError")

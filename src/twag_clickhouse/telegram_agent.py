@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import random
 import re
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -53,6 +55,9 @@ class ChatState:
 class TelegramAgentConfig:
     bot_token: str
     poll_timeout: int = 30
+    request_timeout: int = 45
+    retry_initial: float = 2.0
+    retry_max: float = 60.0
     clear_webhook_on_start: bool = True
     allowed_chat_ids: set[int] = field(default_factory=set)
 
@@ -68,9 +73,17 @@ class TelegramAgentConfig:
             if value.strip()
         }
 
+        poll_timeout = int(os.getenv("TELEGRAM_POLL_TIMEOUT", "30"))
+        request_timeout = int(
+            os.getenv("TELEGRAM_REQUEST_TIMEOUT", str(max(45, poll_timeout + 15)))
+        )
+
         return cls(
             bot_token=bot_token,
-            poll_timeout=int(os.getenv("TELEGRAM_POLL_TIMEOUT", "30")),
+            poll_timeout=poll_timeout,
+            request_timeout=request_timeout,
+            retry_initial=float(os.getenv("TELEGRAM_RETRY_INITIAL_SECONDS", "2")),
+            retry_max=float(os.getenv("TELEGRAM_RETRY_MAX_SECONDS", "60")),
             clear_webhook_on_start=os.getenv(
                 "TELEGRAM_CLEAR_WEBHOOK_ON_POLL",
                 "true",
@@ -80,9 +93,14 @@ class TelegramAgentConfig:
         )
 
 
+class TelegramTransientError(RuntimeError):
+    pass
+
+
 class TelegramApi:
-    def __init__(self, bot_token: str) -> None:
+    def __init__(self, bot_token: str, *, request_timeout: int = 45) -> None:
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
+        self.request_timeout = request_timeout
 
     def request(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         data = None
@@ -99,11 +117,20 @@ class TelegramApi:
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=90) as response:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Telegram API error {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            reason = exc.reason
+            if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason):
+                raise TelegramTransientError(f"Telegram request timed out: {reason}") from exc
+            raise TelegramTransientError(f"Telegram network error: {reason}") from exc
+        except (TimeoutError, socket.timeout, OSError) as exc:
+            if isinstance(exc, OSError) and "timed out" not in str(exc).lower():
+                raise
+            raise TelegramTransientError(f"Telegram request timed out: {exc}") from exc
 
         if not result.get("ok"):
             raise RuntimeError(f"Telegram API error: {result}")
@@ -181,7 +208,7 @@ def answer_message(
     state = states.setdefault(chat_id, ChatState())
 
     if text.startswith("/start") or text.startswith("/help"):
-        return "Hi, I'm a bot that will answer questions about TechWeek NY events!"
+        return "Hi, I'm a bot that answers from Senso by default and uses ClickHouse for TechWeek NY event data."
 
     if is_subjective_question(text):
         return SUBJECTIVE_QUESTION_REPLY
@@ -201,7 +228,7 @@ def answer_message(
 
 def run_telegram_agent() -> int:
     config = TelegramAgentConfig.from_env()
-    telegram = TelegramApi(config.bot_token)
+    telegram = TelegramApi(config.bot_token, request_timeout=config.request_timeout)
     agent = NytwSubconsciousAgent.from_env()
     states: dict[int, ChatState] = {}
 
@@ -210,10 +237,12 @@ def run_telegram_agent() -> int:
 
     print("TWAG Telegram agent is polling. Press Ctrl+C to stop.", flush=True)
     offset: int | None = None
+    retry_delay = config.retry_initial
 
     while True:
         try:
             updates = telegram.get_updates(offset=offset, timeout=config.poll_timeout)
+            retry_delay = config.retry_initial
             for update in updates:
                 offset = int(update["update_id"]) + 1
                 parsed = message_text(update)
@@ -233,6 +262,14 @@ def run_telegram_agent() -> int:
         except KeyboardInterrupt:
             print("\nStopped.")
             return 0
+        except TelegramTransientError as exc:
+            sleep_for = retry_delay + random.uniform(0, min(1.0, retry_delay / 4))
+            print(
+                f"telegram polling transient error: {exc}; retrying in {sleep_for:.1f}s",
+                flush=True,
+            )
+            time.sleep(sleep_for)
+            retry_delay = min(config.retry_max, retry_delay * 2)
         except Exception as exc:
             print(f"telegram polling error: {exc}", flush=True)
             time.sleep(5)

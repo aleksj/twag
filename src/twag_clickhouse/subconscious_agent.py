@@ -11,6 +11,7 @@ from typing import Any
 
 from .client import ClickHouseService
 from .config import ClickHouseConfig
+from .senso import SensoConfig, SensoService, format_senso_answer
 
 
 DEFAULT_SUBCONSCIOUS_BASE_URL = "https://api.subconscious.dev/v1"
@@ -34,10 +35,24 @@ PLANNING_LEAK_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-EVENT_LIST_PATTERN = re.compile(
-    r"\b(top|best|recommend|events?|show|find|list|shortlist)\b",
+EVENT_LIST_COMMAND_PATTERN = re.compile(
+    r"\b(top|best|recommend|show|find|list|shortlist)\b",
     re.IGNORECASE,
 )
+EVENT_WORD_PATTERN = re.compile(r"\bevents?\b", re.IGNORECASE)
+NYTW_EXPLICIT_PATTERN = re.compile(
+    r"\b(ny\s*tech\s*week|nytw|techweek|tech\s*week)\b",
+    re.IGNORECASE,
+)
+NYTW_EVENT_DATA_PATTERN = re.compile(
+    r"\b(events?|hosts?|rsvp|venue|venues|neighborhood|capacity)\b",
+    re.IGNORECASE,
+)
+NYTW_LOCATION_PATTERN = re.compile(
+    r"\b(soho|tribeca|brooklyn|manhattan|williamsburg)\b",
+    re.IGNORECASE,
+)
+COUNT_PATTERN = re.compile(r"\b(how many|count|total|number of)\b", re.IGNORECASE)
 MORE_RESULTS_PATTERN = re.compile(
     r"^\s*(more|next|show more|more results|next results|continue)\s*$",
     re.IGNORECASE,
@@ -226,7 +241,15 @@ def requested_event_limit(question: str, default: int = 5) -> int:
 
 
 def likely_event_list_question(question: str) -> bool:
-    return bool(EVENT_LIST_PATTERN.search(question))
+    return bool(EVENT_LIST_COMMAND_PATTERN.search(question) and EVENT_WORD_PATTERN.search(question))
+
+
+def likely_nytw_data_question(question: str) -> bool:
+    if NYTW_EXPLICIT_PATTERN.search(question):
+        return True
+    if not NYTW_EVENT_DATA_PATTERN.search(question):
+        return False
+    return bool(COUNT_PATTERN.search(question) or NYTW_LOCATION_PATTERN.search(question))
 
 
 def is_more_results_request(question: str) -> bool:
@@ -381,17 +404,20 @@ class NytwSubconsciousAgent:
     def __init__(
         self,
         *,
-        clickhouse: ClickHouseService,
+        clickhouse: ClickHouseService | None = None,
         subconscious: SubconsciousConfig,
+        senso: SensoService | None = None,
     ) -> None:
         self.clickhouse = clickhouse
         self.subconscious = subconscious
+        self.senso = senso
 
     @classmethod
     def from_env(cls) -> "NytwSubconsciousAgent":
+        senso_config = SensoConfig.from_env()
         return cls(
-            clickhouse=ClickHouseService(ClickHouseConfig.from_env()),
             subconscious=SubconsciousConfig.from_env(),
+            senso=SensoService(senso_config) if senso_config else None,
         )
 
     def ask(self, question: str, *, event_offset: int = 0, max_turns: int = 8) -> str:
@@ -403,6 +429,11 @@ class NytwSubconsciousAgent:
         if likely_event_list_question(question):
             result = self._query_sql(build_keyword_event_query(question, offset=event_offset))
             return format_event_rows(result, offset=event_offset)
+
+        if self.senso and not likely_nytw_data_question(question):
+            answer = self._answer_from_senso(question)
+            if answer:
+                return answer
 
         for _ in range(max_turns):
             response = self._chat(messages, tools=[QUERY_TOOL])
@@ -485,6 +516,8 @@ class NytwSubconsciousAgent:
     def _query_sql(self, sql: str) -> dict[str, Any]:
         try:
             safe_sql = add_default_limit(validate_nytw_query(sql))
+            if self.clickhouse is None:
+                self.clickhouse = ClickHouseService(ClickHouseConfig.from_env())
             rows = self.clickhouse.query(safe_sql)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -495,3 +528,10 @@ class NytwSubconsciousAgent:
             "row_count": len(rows),
             "rows": rows,
         }
+
+    def _answer_from_senso(self, question: str) -> str:
+        try:
+            result = self.senso.search(question) if self.senso else {}
+        except Exception as exc:
+            return f"Senso search failed: {exc}"
+        return format_senso_answer(result)

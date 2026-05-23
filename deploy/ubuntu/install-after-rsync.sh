@@ -23,6 +23,18 @@ fi
 echo "Installing TWAG from: $APP_DIR"
 echo "Service user: $SERVICE_USER"
 
+case "$APP_DIR" in
+  /tmp/*|/var/tmp/*)
+    cat >&2 <<EOF
+Warning: $APP_DIR is temporary storage. Use /home/$SERVICE_USER/twag or /opt/twag
+for persistent systemd services; otherwise a reboot or tmp cleanup can remove the
+application directory and systemd will fail before the process starts.
+EOF
+    ;;
+esac
+
+sudo install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$APP_DIR"
+
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip curl
 

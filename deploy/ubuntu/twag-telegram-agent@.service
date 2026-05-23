@@ -20,7 +20,7 @@ TimeoutStopSec=30
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=__APP_DIR__ /run/twag
+ReadWritePaths=/run/twag
 
 [Install]
 WantedBy=multi-user.target
