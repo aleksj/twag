@@ -12,14 +12,12 @@ except ImportError:
 
 from .client import ClickHouseService
 from .cloud import ClickHouseCloudClient, ClickHouseCloudConfig
+from .conversation import AgentConversation
 from .config import ClickHouseConfig
 from .nytw import NytwDataset, inspect_nytw_dataset, load_nytw_dataset
-from .subconscious_agent import (
-    NytwSubconsciousAgent,
-    is_more_results_request,
-    likely_event_list_question,
-    requested_event_limit,
-)
+from .rendering import render_terminal_markdown
+from .senso import SensoConfig, SensoService, sync_senso_kb
+from .subconscious_agent import NytwSubconsciousAgent
 from .subconscious_deploy import build_run_payload, create_run, env_api_key, env_base_url
 from .telegram_agent import run_telegram_agent
 
@@ -30,6 +28,10 @@ def _service() -> ClickHouseService:
 
 def _print_json(value: object) -> None:
     print(json.dumps(value, indent=2, sort_keys=True, default=str))
+
+
+def _print_answer(answer: str) -> None:
+    print(render_terminal_markdown(answer, enabled=sys.stdout.isatty()))
 
 
 def health(_: argparse.Namespace) -> int:
@@ -79,16 +81,56 @@ def load_nytw(args: argparse.Namespace) -> int:
     return 0
 
 
+def sync_senso(args: argparse.Namespace) -> int:
+    config = SensoConfig.from_env()
+    if config is None:
+        raise ValueError("SENSO_API_KEY is required")
+    counts = sync_senso_kb(
+        _service(),
+        SensoService(config),
+        replace=args.replace,
+        batch_size=args.batch_size,
+        chunk_chars=args.chunk_chars,
+        chunk_overlap=args.chunk_overlap,
+    )
+    _print_json({"synced": counts})
+    return 0
+
+
 def ask_nytw_agent(args: argparse.Namespace) -> int:
     agent = NytwSubconsciousAgent.from_env()
+    conversation = AgentConversation()
+
+    def ask(question: str) -> str:
+        if not args.verbose:
+            return conversation.answer(agent, question)
+
+        print("[stream]", flush=True)
+        saw_stream = False
+
+        def raw_stream(chunk: str) -> None:
+            nonlocal saw_stream
+            saw_stream = True
+            print(chunk, end="", flush=True)
+
+        answer = conversation.answer(
+            agent,
+            question,
+            stream_callback=lambda _partial: None,
+            raw_stream_callback=raw_stream,
+        )
+        if saw_stream:
+            print("\n[/stream]", flush=True)
+        else:
+            print("[stream unavailable for direct ClickHouse path]", flush=True)
+        return answer
+
     if args.question:
-        answer = agent.ask(args.question)
-        print(answer)
+        answer = ask(args.question)
+        _print_answer(answer)
         return 0
 
     print("TWAG agent. Ask a question, type 'more' for more event results, or 'exit'.")
-    last_event_question: str | None = None
-    last_event_offset = 0
 
     while True:
         try:
@@ -102,20 +144,8 @@ def ask_nytw_agent(args: argparse.Namespace) -> int:
         if question.lower() in {"exit", "quit", "q"}:
             return 0
 
-        if is_more_results_request(question):
-            if not last_event_question:
-                print("Ask an event-list question first, then type 'more'.")
-                continue
-            last_event_offset += requested_event_limit(last_event_question)
-            answer = agent.ask(last_event_question, event_offset=last_event_offset)
-            print(answer)
-            continue
-
-        answer = agent.ask(question)
-        if likely_event_list_question(question):
-            last_event_question = question
-            last_event_offset = 0
-        print(answer)
+        answer = ask(question)
+        _print_answer(answer)
 
     return 0
 
@@ -224,25 +254,64 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Ask the Subconscious-backed agent, using Senso by default and ClickHouse for NYTW events",
+        help="Ask the Subconscious-backed ClickHouse agent for NYTW events and synced Senso KB context",
     )
     agent_parser.add_argument(
         "question",
         nargs="?",
-        help="Question to answer from Senso or nytw_* tables. Omit to start a dialogue.",
+        help="Question to answer from nytw_* or synced senso_* tables. Omit to start a dialogue.",
+    )
+    agent_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Stream the raw Subconscious response, including thinking tags when emitted.",
     )
     agent_parser.set_defaults(func=ask_nytw_agent)
 
     ask_agent_parser = subparsers.add_parser(
         "ask-nytw-agent",
-        help="Ask the Subconscious-backed agent, using Senso by default and ClickHouse for NYTW events",
+        help="Ask the Subconscious-backed ClickHouse agent for NYTW events and synced Senso KB context",
     )
     ask_agent_parser.add_argument(
         "question",
         nargs="?",
-        help="Question to answer from Senso or nytw_* tables. Omit to start a dialogue.",
+        help="Question to answer from nytw_* or synced senso_* tables. Omit to start a dialogue.",
+    )
+    ask_agent_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Stream the raw Subconscious response, including thinking tags when emitted.",
     )
     ask_agent_parser.set_defaults(func=ask_nytw_agent)
+
+    sync_senso_parser = subparsers.add_parser(
+        "sync-senso",
+        help="Mirror Senso knowledge-base content into ClickHouse senso_* tables",
+    )
+    sync_senso_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Truncate Senso ClickHouse mirror tables before syncing",
+    )
+    sync_senso_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="Rows to insert per ClickHouse batch",
+    )
+    sync_senso_parser.add_argument(
+        "--chunk-chars",
+        type=int,
+        default=3500,
+        help="Approximate characters per senso_kb_chunks row",
+    )
+    sync_senso_parser.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=300,
+        help="Overlapping characters between neighboring chunks",
+    )
+    sync_senso_parser.set_defaults(func=sync_senso)
 
     deploy_agent_parser = subparsers.add_parser(
         "deploy-nytw-agent",

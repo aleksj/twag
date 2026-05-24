@@ -7,10 +7,36 @@ Use the system through Telegram: [https://t.me/Twagbot](https://t.me/Twagbot)
 Send `/start` or `/help` to the bot. It replies:
 
 ```text
-Hi, I'm a bot that will answer questions about TechWeek NY events!
+**TWAG NY Tech Week Bot**
+Ask me data-backed questions about TechWeek NY events.
 
-Production by https://data.flowers/
+**Sponsored by data.flowers** - the data excellence company.
+Want to sponsor TechWeek AI search? Contact info@data.flowers
+
+**Try**
+- List AI events in SoHo
+- Show cybersecurity events with open RSVPs
+- Which neighborhoods have the most events?
+- more
+
+**Commands**
+`/help` - show this guide
+`/verbose` - show the agent thinking stream
+`/quiet` - show only result updates and final answers
+
+Use concrete criteria like topic, date, neighborhood, host, capacity, RSVP status, or time.
 ```
+
+Telegram commands:
+
+```text
+/help
+/verbose
+/quiet
+```
+
+Use `/quiet` for streamed results only. Use `/verbose` when you want to see the
+agent's thinking stream while it constructs and executes data queries.
 
 Ask data-driven questions based on criteria, keywords, dates, locations, hosts,
 capacity, RSVP status, or event counts:
@@ -18,7 +44,7 @@ capacity, RSVP status, or event counts:
 ```text
 List AI events in SoHo
 Which neighborhoods have the most events?
-Show cybersecurity events with RSVP links
+Show cybersecurity events with open RSVPs
 Find investor events on June 4
 List events involving running
 more
@@ -140,11 +166,12 @@ The loader creates these tables:
 
 ### Subconscious Agent
 
-The `twag agent` command runs a Subconscious-backed agent. Senso is the default
-knowledge path when `SENSO_API_KEY` is configured: ordinary company/product/
-policy questions are answered from the Senso knowledge base with source
-citations. NY Tech Week event questions still use the remote ClickHouse
-`nytw_*` tables.
+The `twag agent` command runs a Subconscious-backed ClickHouse agent. Event
+queries are the primary use case and prefer the remote ClickHouse `nytw_*`
+tables. Senso is not queried directly by the agent. Instead, the Nimble tool
+server mirrors Senso knowledge-base content into ClickHouse `senso_*` tables,
+which the agent can use for general Tech Week context when the event rows are
+not enough.
 
 Required environment:
 
@@ -153,8 +180,12 @@ SUBCONSCIOUS_API_KEY=your-subconscious-key
 SUBCONSCIOUS_MODEL=subconscious/tim-qwen3.6-27b
 
 SENSO_API_KEY=your-senso-key
-SENSO_BASE_URL=https://sdk.senso.ai/api/v1
-SENSO_MAX_RESULTS=5
+SENSO_BASE_URL=https://apiv2.senso.ai/api/v1
+SENSO_ORG_ID=8a58ca64-adea-4935-8479-41319cd332b1
+SENSO_ORG_SLUG=techweek
+SENSO_SYNC_ENABLED=true
+SENSO_SYNC_INTERVAL_SECONDS=3600
+SENSO_SYNC_REPLACE=false
 
 CLICKHOUSE_HOST=your-clickhouse-host
 CLICKHOUSE_USERNAME=default
@@ -165,16 +196,17 @@ CLICKHOUSE_RETRY_INITIAL_SECONDS=1
 CLICKHOUSE_RETRY_MAX_SECONDS=8
 ```
 
-Ask a Senso-backed knowledge question:
-
-```bash
-twag agent "What is our refund policy?"
-```
-
 Ask a ClickHouse-backed NY Tech Week question:
 
 ```bash
 twag agent "Which neighborhoods have the most live AI events?"
+```
+
+Stream the raw Subconscious response in the terminal, including thinking tags
+when the model emits them:
+
+```bash
+twag agent --verbose "How many events are in SoHo?"
 ```
 
 Start a dialogue and page through event-list results:
@@ -187,9 +219,18 @@ twag agent
 > exit
 ```
 
-The ClickHouse event tool accepts only single-statement read-only SQL
-(`SELECT`, `WITH`, `SHOW`, `DESCRIBE`, or `EXPLAIN`) and requires NYTW queries
-to reference one of the `nytw_*` tables.
+The ClickHouse tool accepts only single-statement read-only SQL
+(`SELECT`, `WITH`, `SHOW`, `DESCRIBE`, or `EXPLAIN`) and requires queries to
+reference one of the `nytw_*` or synced `senso_*` tables.
+
+Manually sync Senso into ClickHouse:
+
+```bash
+twag sync-senso
+```
+
+The Nimble tool server also starts the same sync loop automatically when
+`SENSO_API_KEY` and `SENSO_SYNC_ENABLED=true` are set.
 
 ### Telegram Bot
 
@@ -210,6 +251,8 @@ TELEGRAM_REQUEST_TIMEOUT=45
 TELEGRAM_RETRY_INITIAL_SECONDS=2
 TELEGRAM_RETRY_MAX_SECONDS=60
 TELEGRAM_STATUS_HEARTBEAT_SECONDS=8
+TELEGRAM_STREAM_DRAFTS=true
+TELEGRAM_STREAM_DRAFT_INTERVAL_SECONDS=1
 ```
 
 Leave `TELEGRAM_ALLOWED_CHAT_IDS` empty to answer every Telegram user. To
@@ -223,6 +266,7 @@ The bot also needs the normal `twag agent` environment:
 
 ```bash
 SUBCONSCIOUS_API_KEY=your-subconscious-key
+SUBCONSCIOUS_ENABLE_THINKING=true
 CLICKHOUSE_HOST=your-clickhouse-host
 CLICKHOUSE_USERNAME=default
 CLICKHOUSE_PASSWORD=your-clickhouse-password
@@ -256,9 +300,24 @@ TWAG Telegram agent is polling. Press Ctrl+C to stop.
 Send `/start` or `/help` to the bot in Telegram. It should reply:
 
 ```text
-Hi, I'm a bot that will answer questions about TechWeek NY events!
+**TWAG NY Tech Week Bot**
+Ask me data-backed questions about TechWeek NY events.
 
-Production by https://data.flowers/
+**Sponsored by data.flowers** - the data excellence company.
+Want to sponsor TechWeek AI search? Contact info@data.flowers
+
+**Try**
+- List AI events in SoHo
+- Show cybersecurity events with open RSVPs
+- Which neighborhoods have the most events?
+- more
+
+**Commands**
+`/help` - show this guide
+`/verbose` - show the agent thinking stream
+`/quiet` - show only result updates and final answers
+
+Use concrete criteria like topic, date, neighborhood, host, capacity, RSVP status, or time.
 ```
 
 Then ask questions such as:
@@ -266,7 +325,7 @@ Then ask questions such as:
 ```text
 Which neighborhoods have the most events?
 List AI events in SoHo
-Show cybersecurity events with RSVP links
+Show cybersecurity events with open RSVPs
 List events involving running
 more
 ```
@@ -274,16 +333,20 @@ more
 The bot will push back on subjective prompts such as "best event" or "what
 should I do?" Ask with criteria instead.
 
-For normal questions, the bot sends a visible progress message before the final
-answer. That status message shows the route it chose, such as ClickHouse event
-search or Senso knowledge search, and updates as the request moves through the
-agent. While a request is still running, the bot keeps editing that same status
-message every `TELEGRAM_STATUS_HEARTBEAT_SECONDS` seconds so the user can see
-that the backend is still working.
+In `/quiet` mode, the bot streams only visible answer text by sending a message
+and editing it as the answer develops. In `/verbose` mode, it also shows the
+agent thinking stream and progress heartbeats so you can see what the backend is
+doing. Thinking mode is enabled with `SUBCONSCIOUS_ENABLE_THINKING=true`; quiet
+mode strips hidden thinking before anything is shown to the user.
 
 Event-list responses stay short. When more matching events exist, the bot says
 so at the bottom of the answer; send `more` to page through the next result set
 for the same search.
+
+ClickHouse event search uses hybrid lexical retrieval: exact keyword matches,
+term-overlap scoring across title, description, markdown body, host,
+neighborhood, venue, address, and badges, plus phrase boosts. This gives
+RAG-like candidate retrieval without requiring a separate embedding pipeline.
 
 Telegram network timeouts are treated as transient. The bot retries with
 exponential backoff using `TELEGRAM_RETRY_INITIAL_SECONDS` and
@@ -397,6 +460,23 @@ REMOTE_DIR=/home/ubuntu/twag
 SSH_PORT=22
 ```
 
+By default, rsync also uploads the local `.env` to the systemd environment file
+on the Ubuntu host:
+
+```bash
+LOCAL_ENV_FILE=.env
+REMOTE_ENV_FILE=/etc/twag/twag.env
+SYNC_ENV_FILE=true
+```
+
+The repository copy still excludes `.env`; the script sends it separately and
+installs it as `/etc/twag/twag.env` with `0640` permissions. To skip syncing
+secrets, run:
+
+```bash
+SYNC_ENV_FILE=false deploy/ubuntu/rsync.privileged.sh
+```
+
 Use a persistent directory such as `/home/ubuntu/twag` or `/opt/twag`. Do not
 use `/tmp/twag` for systemd services; `/tmp` can be cleaned by the OS and
 systemd will fail before the Python process starts.
@@ -454,6 +534,18 @@ The Nimble service defaults to:
 
 ```bash
 TWAG_NIMBLE_COMMAND=.venv/bin/twag-nytw-tool-server
+```
+
+When `SENSO_API_KEY` is set, the Nimble service also mirrors Senso into
+ClickHouse on startup and every `SENSO_SYNC_INTERVAL_SECONDS` seconds:
+
+```bash
+SENSO_API_KEY=your-senso-key
+SENSO_BASE_URL=https://apiv2.senso.ai/api/v1
+SENSO_ORG_ID=8a58ca64-adea-4935-8479-41319cd332b1
+SENSO_ORG_SLUG=techweek
+SENSO_SYNC_ENABLED=true
+SENSO_SYNC_INTERVAL_SECONDS=3600
 ```
 
 Override `TWAG_NIMBLE_COMMAND` in `/etc/twag/twag.env` if your Nimble process is

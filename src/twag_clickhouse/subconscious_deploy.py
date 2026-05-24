@@ -17,8 +17,8 @@ def build_query_tool(tool_url: str, *, tool_token: str | None = None) -> dict[st
         "type": "function",
         "name": "query_nytw_clickhouse",
         "description": (
-            "Run one read-only ClickHouse SQL query against the remote NYTechWeek "
-            "ClickHouse tables and return JSON rows."
+            "Run one read-only ClickHouse SQL query against remote NYTechWeek "
+            "event tables and synced Senso knowledge-base tables."
         ),
         "url": tool_url.rstrip("/") + "/query",
         "method": "POST",
@@ -29,8 +29,8 @@ def build_query_tool(tool_url: str, *, tool_token: str | None = None) -> dict[st
                 "sql": {
                     "type": "string",
                     "description": (
-                        "A single read-only SQL statement using nytw_events, "
-                        "nytw_hosts, nytw_event_hosts, or nytw_manifest."
+                        "A single read-only SQL statement using nytw_* or "
+                        "synced senso_* tables. Use nytw_* first for event questions."
                     ),
                 }
             },

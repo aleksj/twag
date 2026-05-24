@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
 import random
@@ -20,17 +21,20 @@ try:
 except ImportError:
     load_dotenv = None
 
+from .conversation import AgentConversation
+from .rendering import markdown_to_telegram_html
 from .subconscious_agent import (
     NytwSubconsciousAgent,
     is_more_results_request,
     likely_event_list_question,
-    requested_event_limit,
 )
+from .client import CLICKHOUSE_HTTP_LOGGER
 
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 TELEGRAM_STATUS_STEP_LIMIT = 8
 DEFAULT_STATUS_HEARTBEAT_SECONDS = 8.0
+DEFAULT_STREAM_DRAFT_INTERVAL_SECONDS = 1.0
 STATUS_HEARTBEAT_MESSAGES = (
     "Still working; waiting on the backend.",
     "Still working; keeping the request alive.",
@@ -49,22 +53,39 @@ SUBJECTIVE_QUESTION_REPLY = (
     "C'mon, this is NYC, not a vibes committee. I'm not here to crown the "
     "'best' event or tell you what to do with your afternoon. Give me criteria: "
     "topic keywords, date, neighborhood, host, capacity, RSVP status, or time. "
-    "Try: 'List AI events in SoHo on June 3' or 'Show cybersecurity events with RSVP links.'"
+    "Try: 'List AI events in SoHo on June 3' or 'Show cybersecurity events with open RSVPs.'"
 )
-GREETING_REPLY = (
-    "Hi, I'm a bot that will answer questions about TechWeek NY events!\n\n"
-    "Production by https://data.flowers/"
+SPONSOR_LINE = (
+    "**Sponsored by data.flowers** - the data excellence company.\n"
+    "Want to sponsor TechWeek AI search? Contact info@data.flowers"
 )
+HELP_REPLY = (
+    "**TWAG NY Tech Week Bot**\n"
+    "Ask me data-backed questions about TechWeek NY events.\n\n"
+    f"{SPONSOR_LINE}\n\n"
+    "**Try**\n"
+    "- List AI events in SoHo\n"
+    "- Show cybersecurity events with open RSVPs\n"
+    "- Which neighborhoods have the most events?\n"
+    "- more\n\n"
+    "**Commands**\n"
+    "`/help` - show this guide\n"
+    "`/verbose` - show the agent thinking stream\n"
+    "`/quiet` - show only result updates and final answers\n\n"
+    "Use concrete criteria like topic, date, neighborhood, host, capacity, RSVP status, or time."
+)
+GREETING_REPLY = HELP_REPLY
 
 
 @dataclass
 class ChatState:
-    last_event_question: str | None = None
-    last_event_offset: int = 0
+    conversation: AgentConversation = field(default_factory=AgentConversation)
     active_question: str | None = None
     active_route: str | None = None
     active_steps: list[str] = field(default_factory=list)
     status_message_id: int | None = None
+    verbose: bool = False
+    final_reply_sent: bool = False
 
 
 @dataclass
@@ -75,7 +96,10 @@ class TelegramAgentConfig:
     retry_initial: float = 2.0
     retry_max: float = 60.0
     status_heartbeat_seconds: float = DEFAULT_STATUS_HEARTBEAT_SECONDS
+    stream_drafts: bool = True
+    stream_draft_interval_seconds: float = DEFAULT_STREAM_DRAFT_INTERVAL_SECONDS
     clear_webhook_on_start: bool = True
+    warm_clickhouse_on_start: bool = True
     allowed_chat_ids: set[int] = field(default_factory=set)
 
     @classmethod
@@ -107,8 +131,21 @@ class TelegramAgentConfig:
                     str(DEFAULT_STATUS_HEARTBEAT_SECONDS),
                 )
             ),
+            stream_drafts=os.getenv("TELEGRAM_STREAM_DRAFTS", "true").lower()
+            == "true",
+            stream_draft_interval_seconds=float(
+                os.getenv(
+                    "TELEGRAM_STREAM_DRAFT_INTERVAL_SECONDS",
+                    str(DEFAULT_STREAM_DRAFT_INTERVAL_SECONDS),
+                )
+            ),
             clear_webhook_on_start=os.getenv(
                 "TELEGRAM_CLEAR_WEBHOOK_ON_POLL",
+                "true",
+            ).lower()
+            == "true",
+            warm_clickhouse_on_start=os.getenv(
+                "TELEGRAM_WARM_CLICKHOUSE_ON_START",
                 "true",
             ).lower()
             == "true",
@@ -180,7 +217,8 @@ class TelegramApi:
                     "sendMessage",
                     {
                         "chat_id": str(chat_id),
-                        "text": part,
+                        "text": markdown_to_telegram_html(part),
+                        "parse_mode": "HTML",
                         "disable_web_page_preview": "true",
                     },
                 )
@@ -193,13 +231,24 @@ class TelegramApi:
             {
                 "chat_id": str(chat_id),
                 "message_id": str(message_id),
-                "text": text[:TELEGRAM_MESSAGE_LIMIT],
+                "text": markdown_to_telegram_html(text[:TELEGRAM_MESSAGE_LIMIT]),
+                "parse_mode": "HTML",
                 "disable_web_page_preview": "true",
             },
         )
 
     def send_chat_action(self, chat_id: int, action: str = "typing") -> None:
         self.request("sendChatAction", {"chat_id": str(chat_id), "action": action})
+
+    def send_message_draft(self, chat_id: int, draft_id: int, text: str) -> None:
+        self.request(
+            "sendMessageDraft",
+            {
+                "chat_id": str(chat_id),
+                "draft_id": str(draft_id),
+                "text": text[:TELEGRAM_MESSAGE_LIMIT],
+            },
+        )
 
 
 def split_telegram_message(text: str) -> list[str]:
@@ -238,6 +287,14 @@ def message_text(update: dict[str, Any]) -> tuple[int, int, str] | None:
 
 def is_subjective_question(text: str) -> bool:
     return bool(SUBJECTIVE_QUESTION_PATTERN.search(text))
+
+
+def telegram_command(text: str) -> str | None:
+    first = text.strip().split(maxsplit=1)[0]
+    if not first.startswith("/"):
+        return None
+    command = first[1:].split("@", 1)[0].lower()
+    return command or None
 
 
 def status_text(state: ChatState) -> str:
@@ -280,7 +337,10 @@ def answer_route(text: str, state: ChatState) -> tuple[str, str]:
         return "ClickHouse event search", "Fetching the next page of matching events."
     if likely_event_list_question(text):
         return "ClickHouse event search", "Searching NY Tech Week events by topic, location, venue, and host."
-    return "Senso knowledge search", "Searching the knowledge base before falling back to event data if needed."
+    return (
+        "ClickHouse agent query",
+        "Querying NYTW event data first, with synced Senso KB context available if needed.",
+    )
 
 
 def answer_message(
@@ -289,30 +349,43 @@ def answer_message(
     chat_id: int,
     text: str,
     progress: Any | None = None,
+    stream_callback: Any | None = None,
+    raw_stream_callback: Any | None = None,
 ) -> str:
     state = states.setdefault(chat_id, ChatState())
+    command = telegram_command(text)
 
-    if text.startswith("/start") or text.startswith("/help"):
+    if command == "start":
         return GREETING_REPLY
+    if command == "help":
+        return HELP_REPLY
+    if command == "verbose":
+        state.verbose = True
+        return "Verbose mode is on. I'll show the agent thinking stream while I work."
+    if command == "quiet":
+        state.verbose = False
+        return "Quiet mode is on. I'll show only streamed results and final answers."
 
     if is_subjective_question(text):
         return SUBJECTIVE_QUESTION_REPLY
 
     if is_more_results_request(text):
-        if not state.last_event_question:
-            return "Ask an event-list question first, then send 'more'."
         if progress:
             progress("Requesting the next page from ClickHouse.")
-        state.last_event_offset += requested_event_limit(state.last_event_question)
-        return agent.ask(state.last_event_question, event_offset=state.last_event_offset)
+        return state.conversation.answer(
+            agent,
+            text,
+            no_previous_more_message="Ask an event-list question first, then send 'more'.",
+        )
 
     if progress:
         progress("Running the agent.")
-    answer = agent.ask(text)
-    if likely_event_list_question(text):
-        state.last_event_question = text
-        state.last_event_offset = 0
-    return answer
+    return state.conversation.answer(
+        agent,
+        text,
+        stream_callback=stream_callback,
+        raw_stream_callback=raw_stream_callback,
+    )
 
 
 def answer_message_with_status(
@@ -323,22 +396,36 @@ def answer_message_with_status(
     chat_id: int,
     text: str,
     status_heartbeat_seconds: float = DEFAULT_STATUS_HEARTBEAT_SECONDS,
+    stream_drafts: bool = True,
+    stream_draft_interval_seconds: float = DEFAULT_STREAM_DRAFT_INTERVAL_SECONDS,
 ) -> str:
     state = states.setdefault(chat_id, ChatState())
+    state.final_reply_sent = False
+    command = telegram_command(text)
 
-    if text.startswith("/start") or text.startswith("/help") or is_subjective_question(text):
+    if command or is_subjective_question(text):
         return answer_message(agent, states, chat_id, text)
 
-    route, first_step = answer_route(text, state)
-    update_chat_status(state, question=text, route=route, step="Received your message.")
-    update_chat_status(state, step=first_step)
+    show_status = state.verbose
+    if show_status:
+        route, first_step = answer_route(text, state)
+        update_chat_status(state, question=text, route=route, step="Received your message.")
+        update_chat_status(state, step=first_step)
 
-    sent = telegram.send_message(chat_id, status_text(state))
-    message = sent[0].get("result", {}) if sent else {}
-    state.status_message_id = int(message.get("message_id", 0) or 0) or None
+        sent = telegram.send_message(chat_id, status_text(state))
+        message = sent[0].get("result", {}) if sent else {}
+        state.status_message_id = int(message.get("message_id", 0) or 0) or None
     status_lock = threading.Lock()
+    stream_lock = threading.Lock()
+    last_draft_at = 0.0
+    draft_failed = False
+    last_stream_text = ""
+    stream_message_id: int | None = None
+    raw_stream_text = ""
 
     def progress(step: str) -> None:
+        if not show_status:
+            return
         with status_lock:
             update_chat_status(state, step=step)
             text_to_send = status_text(state)
@@ -348,6 +435,35 @@ def answer_message_with_status(
                 telegram.edit_message_text(chat_id, state.status_message_id, text_to_send)
         except Exception as exc:
             print(f"telegram status update failed: {exc}", flush=True)
+
+    def stream_update(partial: str, *, force: bool = False) -> None:
+        nonlocal draft_failed, last_draft_at, last_stream_text, stream_message_id
+        if not partial or not stream_drafts or draft_failed:
+            return
+        now = time.monotonic()
+        with stream_lock:
+            if partial == last_stream_text:
+                return
+            if not force and now - last_draft_at < stream_draft_interval_seconds:
+                return
+            last_stream_text = partial
+            last_draft_at = now
+            text_to_send = partial[-TELEGRAM_MESSAGE_LIMIT:].strip()
+        try:
+            if stream_message_id:
+                telegram.edit_message_text(chat_id, stream_message_id, text_to_send)
+            else:
+                sent = telegram.send_message(chat_id, text_to_send)
+                message = sent[0].get("result", {}) if sent else {}
+                stream_message_id = int(message.get("message_id", 0) or 0) or None
+        except Exception as exc:
+            draft_failed = True
+            print(f"telegram streaming disabled for this reply: {exc}", flush=True)
+
+    def raw_stream_update(chunk: str) -> None:
+        nonlocal raw_stream_text
+        raw_stream_text += chunk
+        stream_update(raw_stream_text)
 
     stop_heartbeat = threading.Event()
 
@@ -370,9 +486,21 @@ def answer_message_with_status(
 
     failed = False
     try:
-        heartbeat_thread.start()
+        if show_status:
+            heartbeat_thread.start()
         progress("Waiting for the agent response.")
-        answer = answer_message(agent, states, chat_id, text, progress=progress)
+        answer = answer_message(
+            agent,
+            states,
+            chat_id,
+            text,
+            progress=progress,
+            stream_callback=(lambda _partial: None) if state.verbose else stream_update,
+            raw_stream_callback=raw_stream_update if state.verbose else None,
+        )
+        stream_update(answer, force=True)
+        if stream_message_id:
+            state.final_reply_sent = True
         progress("Answer ready; sending it now.")
         return answer
     except Exception:
@@ -380,7 +508,8 @@ def answer_message_with_status(
         raise
     finally:
         stop_heartbeat.set()
-        heartbeat_thread.join(timeout=1)
+        if show_status:
+            heartbeat_thread.join(timeout=1)
         if state.status_message_id:
             try:
                 with status_lock:
@@ -401,10 +530,28 @@ def run_telegram_agent() -> int:
     agent = NytwSubconsciousAgent.from_env()
     states: dict[int, ChatState] = {}
 
-    if config.clear_webhook_on_start:
-        telegram.delete_webhook()
+    if config.warm_clickhouse_on_start:
+        agent.start_clickhouse_warmup(
+            error_callback=lambda exc: print(
+                f"clickhouse warmup failed: {exc}",
+                flush=True,
+            )
+        )
 
-    print("TWAG Telegram agent is polling. Press Ctrl+C to stop.", flush=True)
+    clickhouse_logger = logging.getLogger(CLICKHOUSE_HTTP_LOGGER)
+    print(
+        "TWAG Telegram agent is polling. "
+        f"module={__file__} "
+        f"clickhouse_filters={[type(filter_).__name__ for filter_ in clickhouse_logger.filters]} "
+        "Press Ctrl+C to stop.",
+        flush=True,
+    )
+
+    if config.clear_webhook_on_start:
+        try:
+            telegram.delete_webhook()
+        except TelegramTransientError as exc:
+            print(f"telegram deleteWebhook transient error: {exc}; continuing to poll", flush=True)
     offset: int | None = None
     retry_delay = config.retry_initial
 
@@ -430,11 +577,17 @@ def run_telegram_agent() -> int:
                         chat_id=chat_id,
                         text=text,
                         status_heartbeat_seconds=config.status_heartbeat_seconds,
+                        stream_drafts=config.stream_drafts,
+                        stream_draft_interval_seconds=config.stream_draft_interval_seconds,
                     )
                 except Exception as exc:
                     reply = f"Sorry, I hit an error while answering: {exc}"
 
-                telegram.send_message(chat_id, reply)
+                state = states.get(chat_id)
+                if reply and not (state and state.final_reply_sent):
+                    telegram.send_message(chat_id, reply)
+                if state:
+                    state.final_reply_sent = False
         except KeyboardInterrupt:
             print("\nStopped.")
             return 0

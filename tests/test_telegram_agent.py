@@ -2,9 +2,12 @@ import os
 import time
 import urllib.error
 from unittest.mock import patch
+from urllib.parse import parse_qs
 
 from twag_clickhouse.telegram_agent import (
+    ChatState,
     GREETING_REPLY,
+    HELP_REPLY,
     SUBJECTIVE_QUESTION_REPLY,
     TelegramAgentConfig,
     TelegramApi,
@@ -50,7 +53,29 @@ def test_answer_message_returns_greeting_for_start():
             raise AssertionError("agent should not be called for /start")
 
     assert answer_message(Agent(), {}, 123, "/start") == GREETING_REPLY
-    assert "Production by https://data.flowers/" in GREETING_REPLY
+    assert GREETING_REPLY == HELP_REPLY
+    assert "**Sponsored by data.flowers**" in GREETING_REPLY
+    assert "List AI events in SoHo" in GREETING_REPLY
+    assert "Use concrete criteria" in GREETING_REPLY
+
+
+def test_answer_message_supports_help_verbose_and_quiet_commands():
+    class Agent:
+        def ask(self, question):
+            raise AssertionError("agent should not be called for commands")
+
+    states = {123: ChatState()}
+
+    assert answer_message(Agent(), states, 123, "/help") == HELP_REPLY
+    assert answer_message(Agent(), states, 123, "/verbose@Twagbot").startswith(
+        "Verbose mode is on"
+    )
+    assert states[123].verbose is True
+    assert answer_message(Agent(), states, 123, "/quiet").startswith("Quiet mode is on")
+    assert states[123].verbose is False
+    assert "/help" in HELP_REPLY
+    assert "/verbose" in HELP_REPLY
+    assert "/quiet" in HELP_REPLY
 
 
 def test_subjective_question_detection():
@@ -65,6 +90,7 @@ def test_answer_message_ridicules_subjective_questions_without_agent_call():
             raise AssertionError("agent should not be called for subjective questions")
 
     assert answer_message(Agent(), {}, 123, "best event?") == SUBJECTIVE_QUESTION_REPLY
+    assert "open RSVPs" in SUBJECTIVE_QUESTION_REPLY
 
 
 def test_answer_message_with_status_sends_progress_updates():
@@ -92,9 +118,12 @@ def test_answer_message_with_status_sends_progress_updates():
         def send_chat_action(self, chat_id, action="typing"):
             self.actions.append((chat_id, action))
 
+        def send_message_draft(self, chat_id, draft_id, text):
+            pass
+
     telegram = Telegram()
     agent = Agent()
-    states = {}
+    states = {123: ChatState(verbose=True)}
 
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
@@ -105,12 +134,14 @@ def test_answer_message_with_status_sends_progress_updates():
     )
 
     assert answer == "Here are the events."
-    assert agent.questions == [("events in upper west side?", {})]
+    assert agent.questions[0][0] == "events in upper west side?"
+    assert callable(agent.questions[0][1]["stream_callback"])
     assert "Route: ClickHouse event search" in telegram.sent[0][1]
     assert any("Running the agent." in edit[2] for edit in telegram.edits)
     assert telegram.edits[-1][2].endswith("Done.")
     assert states[123].active_question is None
     assert states[123].status_message_id is None
+    assert states[123].final_reply_sent is True
 
 
 def test_answer_message_with_status_skips_progress_for_subjective_questions():
@@ -160,7 +191,7 @@ def test_answer_message_with_status_heartbeats_during_slow_work():
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
         agent=Agent(),  # type: ignore[arg-type]
-        states={},
+        states={123: ChatState(verbose=True)},
         chat_id=123,
         text="events in upper west side?",
         status_heartbeat_seconds=0.01,
@@ -171,6 +202,91 @@ def test_answer_message_with_status_heartbeats_during_slow_work():
     assert len(telegram.actions) >= 2
 
 
+def test_answer_message_with_status_streams_telegram_drafts():
+    class Agent:
+        def ask(self, question, **kwargs):
+            kwargs["stream_callback"]("Partial")
+            kwargs["stream_callback"]("Partial answer")
+            return "Partial answer"
+
+    class Telegram:
+        def __init__(self):
+            self.sent = []
+            self.edits = []
+            self.actions = []
+            self.drafts = []
+
+        def send_message(self, chat_id, text):
+            self.sent.append((chat_id, text))
+            return [{"result": {"message_id": 101}}]
+
+        def edit_message_text(self, chat_id, message_id, text):
+            self.edits.append((chat_id, message_id, text))
+
+        def send_chat_action(self, chat_id, action="typing"):
+            self.actions.append((chat_id, action))
+
+        def send_message_draft(self, chat_id, draft_id, text):
+            self.drafts.append((chat_id, draft_id, text))
+
+    telegram = Telegram()
+    states = {}
+
+    answer = answer_message_with_status(
+        telegram=telegram,  # type: ignore[arg-type]
+        agent=Agent(),  # type: ignore[arg-type]
+        states=states,
+        chat_id=123,
+        text="how many events in soho?",
+        stream_drafts=True,
+        stream_draft_interval_seconds=0,
+    )
+
+    assert answer == "Partial answer"
+    assert [sent[1] for sent in telegram.sent] == ["Partial"]
+    assert telegram.edits[-1][2] == "Partial answer"
+    assert states[123].final_reply_sent is True
+
+
+def test_verbose_mode_streams_raw_thinking_text():
+    class Agent:
+        def ask(self, question, **kwargs):
+            kwargs["raw_stream_callback"]("<think>plan")
+            kwargs["raw_stream_callback"]("</think>Answer")
+            return "Answer"
+
+    class Telegram:
+        def __init__(self):
+            self.sent = []
+            self.edits = []
+            self.actions = []
+
+        def send_message(self, chat_id, text):
+            self.sent.append((chat_id, text))
+            return [{"result": {"message_id": len(self.sent)}}]
+
+        def edit_message_text(self, chat_id, message_id, text):
+            self.edits.append((chat_id, message_id, text))
+
+        def send_chat_action(self, chat_id, action="typing"):
+            self.actions.append((chat_id, action))
+
+    telegram = Telegram()
+    states = {123: ChatState(verbose=True)}
+
+    answer = answer_message_with_status(
+        telegram=telegram,  # type: ignore[arg-type]
+        agent=Agent(),  # type: ignore[arg-type]
+        states=states,
+        chat_id=123,
+        text="how many events in soho?",
+        stream_draft_interval_seconds=0,
+    )
+
+    assert answer == "Answer"
+    assert any("<think>plan</think>Answer" in edit[2] for edit in telegram.edits)
+
+
 def test_telegram_config_reads_retry_settings():
     env = {
         "TELEGRAM_BOT_TOKEN": "token",
@@ -179,6 +295,9 @@ def test_telegram_config_reads_retry_settings():
         "TELEGRAM_RETRY_INITIAL_SECONDS": "3",
         "TELEGRAM_RETRY_MAX_SECONDS": "30",
         "TELEGRAM_STATUS_HEARTBEAT_SECONDS": "4",
+        "TELEGRAM_STREAM_DRAFTS": "false",
+        "TELEGRAM_STREAM_DRAFT_INTERVAL_SECONDS": "0.5",
+        "TELEGRAM_WARM_CLICKHOUSE_ON_START": "false",
     }
 
     with patch.dict(os.environ, env, clear=True):
@@ -189,6 +308,9 @@ def test_telegram_config_reads_retry_settings():
     assert config.retry_initial == 3
     assert config.retry_max == 30
     assert config.status_heartbeat_seconds == 4
+    assert config.stream_drafts is False
+    assert config.stream_draft_interval_seconds == 0.5
+    assert config.warm_clickhouse_on_start is False
 
 
 def test_telegram_api_timeout_is_transient():
@@ -204,3 +326,29 @@ def test_telegram_api_timeout_is_transient():
             assert "timed out" in str(exc)
         else:
             raise AssertionError("expected TelegramTransientError")
+
+
+def test_telegram_api_sends_html_parse_mode_for_markdown_answers():
+    api = TelegramApi("token", request_timeout=1)
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true, "result": {"message_id": 1}}'
+
+    def fake_urlopen(request, timeout):
+        captured["data"] = request.data.decode("utf-8")
+        return Response()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        api.send_message(123, "**AI & Agents** — use `more`")
+
+    payload = {key: values[0] for key, values in parse_qs(captured["data"]).items()}
+    assert payload["parse_mode"] == "HTML"
+    assert payload["text"] == "<b>AI &amp; Agents</b> — use <code>more</code>"

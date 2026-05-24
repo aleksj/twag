@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import pytest
+from unittest.mock import patch
 
 from twag_clickhouse.subconscious_agent import (
     NytwSubconsciousAgent,
@@ -10,6 +12,7 @@ from twag_clickhouse.subconscious_agent import (
     build_keyword_event_query,
     clean_model_answer,
     expanded_keyword_terms,
+    extract_embedded_tool_calls,
     format_event_rows,
     is_more_results_request,
     likely_event_list_question,
@@ -17,6 +20,8 @@ from twag_clickhouse.subconscious_agent import (
     looks_like_planning_leak,
     requested_event_limit,
     validate_nytw_query,
+    visible_stream_content,
+    wants_open_rsvps,
 )
 
 
@@ -24,6 +29,12 @@ def test_validate_nytw_query_accepts_read_only_nytw_select() -> None:
     sql = validate_nytw_query(
         "SELECT title FROM nytw_events WHERE fetch_status = 'ok' LIMIT 10"
     )
+
+    assert sql.startswith("SELECT title")
+
+
+def test_validate_nytw_query_accepts_synced_senso_select() -> None:
+    sql = validate_nytw_query("SELECT title FROM senso_kb_chunks LIMIT 10")
 
     assert sql.startswith("SELECT title")
 
@@ -50,6 +61,12 @@ def test_clean_model_answer_removes_thinking_tail_marker() -> None:
     assert answer == "There are 10 events."
 
 
+def test_visible_stream_content_hides_thinking_until_final_answer() -> None:
+    assert visible_stream_content("<think>planning") == ""
+    assert visible_stream_content("<think>planning</think>Final answer") == "Final answer"
+    assert visible_stream_content("Final answer") == "Final answer"
+
+
 def test_looks_like_planning_leak_detects_verbose_process_output() -> None:
     content = (
         "The user is asking for the top events. I need to query ClickHouse "
@@ -57,7 +74,21 @@ def test_looks_like_planning_leak_detects_verbose_process_output() -> None:
     )
 
     assert looks_like_planning_leak(content)
+    assert looks_like_planning_leak("<think>I need to call query_nytw_clickhouse with SQL</think>")
     assert not looks_like_planning_leak("There are 1,360 live events.")
+
+
+def test_extract_embedded_tool_calls_recovers_json_tool_content() -> None:
+    content = (
+        '<think>{"name":"query_nytw_clickhouse","arguments":'
+        '{"sql":"SELECT count() FROM nytw_events"}}</think>'
+    )
+
+    calls = extract_embedded_tool_calls(content)
+
+    assert len(calls) == 1
+    args = json.loads(calls[0]["function"]["arguments"])
+    assert args["sql"] == "SELECT count() FROM nytw_events"
 
 
 def test_requested_event_limit_reads_top_n() -> None:
@@ -74,6 +105,9 @@ def test_build_keyword_event_query_is_limited_and_targets_nytw_events() -> None:
     assert "orchestration" in sql
     assert "neighborhood ILIKE" in sql
     assert "venue_name ILIKE" in sql
+    assert "retrieval_text" in sql
+    assert "term_overlap" in sql
+    assert "arrayStringConcat(badges" in sql
 
 
 def test_build_keyword_event_query_supports_offset() -> None:
@@ -81,6 +115,18 @@ def test_build_keyword_event_query_supports_offset() -> None:
 
     assert "LIMIT 5" in sql
     assert "OFFSET 5" in sql
+
+
+def test_build_keyword_event_query_filters_open_rsvps_without_polluting_keywords() -> None:
+    sql = build_keyword_event_query("Show cybersecurity events with open RSVPs")
+
+    assert wants_open_rsvps("Show cybersecurity events with open RSVPs")
+    assert "rsvp_url != ''" in sql
+    assert "NOT at_capacity" in sql
+    assert "remaining_capacity IS NULL OR remaining_capacity > 0" in sql
+    assert "cybersecurity" in sql
+    assert "%open%" not in sql
+    assert "%rsvps%" not in sql
 
 
 def test_expanded_keyword_terms_handles_running() -> None:
@@ -171,11 +217,6 @@ def test_format_event_rows_adds_more_hint_only_when_extra_row_exists() -> None:
     assert "Send `more` for the next page" not in output_without_extra
 
 
-class FakeClickHouse:
-    def query(self, sql: str) -> list[dict[str, str]]:
-        raise AssertionError(f"ClickHouse should not be called for Senso-default questions: {sql}")
-
-
 class RecordingClickHouse:
     def __init__(self) -> None:
         self.sql: str | None = None
@@ -197,33 +238,6 @@ class RecordingClickHouse:
         ]
 
 
-class FakeSenso:
-    def __init__(self) -> None:
-        self.queries: list[str] = []
-
-    def search(self, query: str) -> dict[str, object]:
-        self.queries.append(query)
-        return {
-            "answer": "Customers can request a full refund within 30 days.",
-            "results": [{"title": "Refund Policy", "score": 0.96}],
-        }
-
-
-def test_agent_uses_senso_by_default_for_non_nytw_questions() -> None:
-    senso = FakeSenso()
-    agent = NytwSubconsciousAgent(
-        clickhouse=FakeClickHouse(),  # type: ignore[arg-type]
-        subconscious=SubconsciousConfig(api_key="test"),
-        senso=senso,  # type: ignore[arg-type]
-    )
-
-    answer = agent.ask("What is our refund policy for events?")
-
-    assert senso.queries == ["What is our refund policy for events?"]
-    assert "full refund within 30 days" in answer
-    assert "Sources: Refund Policy (0.96)" in answer
-
-
 def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
     clickhouse = RecordingClickHouse()
     agent = NytwSubconsciousAgent(
@@ -241,9 +255,41 @@ def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
     assert "Send `more` for the next page" in answer
 
 
-def test_agent_from_env_does_not_require_clickhouse_for_senso_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agent_executes_embedded_tool_call_in_thinking_content() -> None:
+    class AgentWithEmbeddedTool(NytwSubconsciousAgent):
+        def __init__(self) -> None:
+            super().__init__(
+                clickhouse=RecordingClickHouse(),  # type: ignore[arg-type]
+                subconscious=SubconsciousConfig(api_key="test"),
+            )
+            self.calls = 0
+
+        def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": (
+                                    '<think>{"name":"query_nytw_clickhouse","arguments":'
+                                    '{"sql":"SELECT title FROM nytw_events"}}</think>'
+                                ),
+                            }
+                        }
+                    ]
+                }
+            return {"choices": [{"message": {"role": "assistant", "content": "Final answer"}}]}
+
+    agent = AgentWithEmbeddedTool()
+
+    assert agent.ask("how many events?") == "Final answer"
+    assert agent.clickhouse.sql is not None  # type: ignore[union-attr]
+
+
+def test_agent_from_env_does_not_require_clickhouse_until_query(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUBCONSCIOUS_API_KEY", "subconscious-test")
-    monkeypatch.setenv("SENSO_API_KEY", "senso-test")
     monkeypatch.delenv("CLICKHOUSE_HOST", raising=False)
     monkeypatch.delenv("CLICKHOUSE_PASSWORD", raising=False)
     monkeypatch.delenv("CLICKHOUSE_API_KEY", raising=False)
@@ -251,4 +297,101 @@ def test_agent_from_env_does_not_require_clickhouse_for_senso_default(monkeypatc
     agent = NytwSubconsciousAgent.from_env()
 
     assert agent.clickhouse is None
-    assert agent.senso is not None
+
+
+def test_subconscious_config_enables_thinking_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBCONSCIOUS_API_KEY", "subconscious-test")
+    monkeypatch.delenv("SUBCONSCIOUS_ENABLE_THINKING", raising=False)
+
+    assert SubconsciousConfig.from_env().enable_thinking is True
+
+    monkeypatch.setenv("SUBCONSCIOUS_ENABLE_THINKING", "false")
+
+    assert SubconsciousConfig.from_env().enable_thinking is False
+
+
+def test_chat_request_includes_thinking_flag() -> None:
+    agent = NytwSubconsciousAgent(subconscious=SubconsciousConfig(api_key="test"))
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return Response()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        agent._chat([{"role": "user", "content": "hi"}])
+
+    assert captured["body"]["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_chat_stream_accumulates_visible_content_after_thinking() -> None:
+    agent = NytwSubconsciousAgent(subconscious=SubconsciousConfig(api_key="test"))
+    updates = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            chunks = [
+                {"choices": [{"delta": {"content": "<think>plan"}}]},
+                {"choices": [{"delta": {"content": "</think>Hello"}}]},
+                {"choices": [{"delta": {"content": " world"}}]},
+            ]
+            for chunk in chunks:
+                yield f"data: {json.dumps(chunk)}\n".encode()
+            yield b"data: [DONE]\n"
+
+    with patch("urllib.request.urlopen", return_value=Response()):
+        response = agent._chat(
+            [{"role": "user", "content": "hi"}],
+            stream_callback=updates.append,
+        )
+
+    assert response["choices"][0]["message"]["content"] == "<think>plan</think>Hello world"
+    assert updates == ["Hello", "Hello world"]
+
+
+def test_chat_stream_can_emit_raw_thinking_content() -> None:
+    agent = NytwSubconsciousAgent(subconscious=SubconsciousConfig(api_key="test"))
+    visible_updates = []
+    raw_updates = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            chunks = [
+                {"choices": [{"delta": {"content": "<think>plan"}}]},
+                {"choices": [{"delta": {"content": "</think>Answer"}}]},
+            ]
+            for chunk in chunks:
+                yield f"data: {json.dumps(chunk)}\n".encode()
+            yield b"data: [DONE]\n"
+
+    with patch("urllib.request.urlopen", return_value=Response()):
+        agent._chat(
+            [{"role": "user", "content": "hi"}],
+            stream_callback=visible_updates.append,
+            raw_stream_callback=raw_updates.append,
+        )
+
+    assert visible_updates == ["Answer"]
+    assert raw_updates == ["<think>plan", "</think>Answer"]

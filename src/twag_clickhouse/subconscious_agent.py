@@ -3,15 +3,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from html import unescape
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .client import ClickHouseService
 from .config import ClickHouseConfig
-from .senso import SensoConfig, SensoService, format_senso_answer
 
 
 DEFAULT_SUBCONSCIOUS_BASE_URL = "https://api.subconscious.dev/v1"
@@ -27,11 +27,17 @@ FORBIDDEN_SQL = re.compile(
 
 READ_ONLY_START = re.compile(r"^\s*(select|with|show|describe|desc|explain)\b", re.IGNORECASE)
 LIMIT_PATTERN = re.compile(r"\blimit\b", re.IGNORECASE)
-NYTW_TABLE_PATTERN = re.compile(r"\bnytw_(events|hosts|event_hosts|manifest)\b", re.IGNORECASE)
+AGENT_TABLE_PATTERN = re.compile(
+    r"\b("
+    r"nytw_(events|hosts|event_hosts|manifest)|"
+    r"senso_(kb_nodes|kb_documents|kb_chunks|sync_runs)"
+    r")\b",
+    re.IGNORECASE,
+)
 PLANNING_LEAK_PATTERN = re.compile(
     r"\b("
     r"the user is asking|i need to|i should|i will|let'?s|query:|"
-    r"clickhouse|sql query|tool call|execute"
+    r"clickhouse|sql query|tool call|query_nytw_clickhouse|execute"
     r")\b",
     re.IGNORECASE,
 )
@@ -66,6 +72,18 @@ MORE_RESULTS_PATTERN = re.compile(
     r"^\s*(more|next|show more|more results|next results|continue)\s*$",
     re.IGNORECASE,
 )
+OPEN_RSVP_PATTERN = re.compile(
+    r"\b("
+    r"open\s+rsvps?|available\s+rsvps?|still\s+open|"
+    r"still\s+have\s+open\s+rsvps?|not\s+full|"
+    r"spots?\s+(?:left|available)|capacity\s+(?:left|available)"
+    r")\b",
+    re.IGNORECASE,
+)
+RSVP_LINK_PHRASE_PATTERN = re.compile(
+    r"\b(?:with\s+)?rsvp\s+links?\b|\brsvp\s+urls?\b",
+    re.IGNORECASE,
+)
 
 NYTW_AGENT_SYSTEM_PROMPT = """
 You are NYTechWeek ClickHouse Agent, a data analyst for the NY Tech Week 2026
@@ -97,8 +115,30 @@ nytw_event_hosts:
 nytw_manifest:
 - event_id, url, title, host, date_time, neighborhood, badges, source, raw_json
 
+senso_kb_nodes:
+- kb_node_id, parent_id, path, name, node_type, content_id, version
+- processing_status, raw_json, synced_at
+
+senso_kb_documents:
+- kb_node_id, content_id, title, summary, text, content_json, download_url
+- filename, content_hash, synced_at
+
+senso_kb_chunks:
+- kb_node_id, chunk_index, path, title, chunk_text, token_estimate, synced_at
+
+senso_sync_runs:
+- run_id, started_at, finished_at, status, nodes, documents, chunks, error
+
 Important query rules:
+- Event queries are primary. For event discovery, ranking, counts, schedules,
+  capacity, venue, host, RSVP, or neighborhood questions, query nytw_* tables
+  first and prefer nytw_* over Senso.
+- Senso is mirrored into ClickHouse as senso_* tables. Never call Senso
+  directly. Use senso_* only for general-purpose Tech Week context, policy,
+  background, or explanatory questions that the NYTW event rows cannot answer.
 - Prefer live events: fetch_status = 'ok' AND NOT canceled.
+- For "open RSVP", "spots left", or "not full" questions, filter to events
+  with rsvp_url != '', NOT at_capacity, and remaining_capacity IS NULL or > 0.
 - Exclude the platform admin host when ranking real hosts:
   is_platform_admin = false.
 - Always include enough identifying context in final answers: title, date/time,
@@ -140,8 +180,8 @@ QUERY_TOOL = {
     "function": {
         "name": "query_nytw_clickhouse",
         "description": (
-            "Run one read-only ClickHouse SQL query against the NYTechWeek "
-            "tables and return JSON rows."
+            "Run one read-only ClickHouse SQL query against NYTechWeek event "
+            "tables and synced Senso knowledge-base tables, then return JSON rows."
         ),
         "parameters": {
             "type": "object",
@@ -149,8 +189,9 @@ QUERY_TOOL = {
                 "sql": {
                     "type": "string",
                     "description": (
-                        "A single read-only SQL statement using nytw_events, "
-                        "nytw_hosts, nytw_event_hosts, or nytw_manifest."
+                        "A single read-only SQL statement using nytw_* tables "
+                        "or synced senso_* tables. Use nytw_* first for event "
+                        "questions."
                     ),
                 }
             },
@@ -167,6 +208,7 @@ class SubconsciousConfig:
     model: str = DEFAULT_SUBCONSCIOUS_MODEL
     base_url: str = DEFAULT_SUBCONSCIOUS_BASE_URL
     max_tokens: int = 1200
+    enable_thinking: bool = True
 
     @classmethod
     def from_env(cls) -> "SubconsciousConfig":
@@ -184,6 +226,11 @@ class SubconsciousConfig:
             ).strip()
             or DEFAULT_SUBCONSCIOUS_BASE_URL,
             max_tokens=int(os.getenv("SUBCONSCIOUS_MAX_TOKENS", "1200")),
+            enable_thinking=os.getenv(
+                "SUBCONSCIOUS_ENABLE_THINKING",
+                "true",
+            ).lower()
+            == "true",
         )
 
 
@@ -211,8 +258,8 @@ def validate_nytw_query(sql: str) -> str:
         normalized,
         re.IGNORECASE,
     )
-    if not starts_with_table_inspection and not NYTW_TABLE_PATTERN.search(normalized):
-        raise UnsafeQueryError("Query must reference a nytw_* table")
+    if not starts_with_table_inspection and not AGENT_TABLE_PATTERN.search(normalized):
+        raise UnsafeQueryError("Query must reference a nytw_* or senso_* table")
 
     return normalized
 
@@ -235,11 +282,81 @@ def clean_model_answer(content: str) -> str:
     return content.strip()
 
 
+def visible_stream_content(content: str) -> str:
+    if "</think>" in content:
+        return content.rsplit("</think>", 1)[-1]
+    if "<think" in content:
+        return ""
+    return content
+
+
 def looks_like_planning_leak(content: str) -> bool:
     cleaned = clean_model_answer(content)
-    if not cleaned:
+    candidate = cleaned or content
+    if not candidate:
         return False
-    return bool(PLANNING_LEAK_PATTERN.search(cleaned)) and len(cleaned.split()) > 20
+    return bool(PLANNING_LEAK_PATTERN.search(candidate)) and len(candidate.split()) > 5
+
+
+def _tool_call_from_object(value: Any, index: int) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+
+    function = value.get("function") if isinstance(value.get("function"), dict) else value
+    name = function.get("name")
+    if name != "query_nytw_clickhouse":
+        return None
+
+    arguments = function.get("arguments") or value.get("arguments") or value.get("parameters")
+    sql = ""
+    if isinstance(arguments, str):
+        try:
+            decoded = json.loads(arguments)
+            if isinstance(decoded, dict):
+                sql = str(decoded.get("sql") or "")
+        except json.JSONDecodeError:
+            sql = arguments
+    elif isinstance(arguments, dict):
+        sql = str(arguments.get("sql") or "")
+    elif isinstance(value.get("sql"), str):
+        sql = str(value["sql"])
+
+    if not sql:
+        return None
+
+    return {
+        "id": value.get("id") or f"embedded-tool-call-{index}",
+        "function": {
+            "name": "query_nytw_clickhouse",
+            "arguments": json.dumps({"sql": sql}),
+        },
+    }
+
+
+def extract_embedded_tool_calls(content: str) -> list[dict[str, Any]]:
+    """Recover tool calls that some thinking models emit as content JSON."""
+    if "query_nytw_clickhouse" not in content:
+        return []
+
+    decoder = json.JSONDecoder()
+    calls: list[dict[str, Any]] = []
+    seen_sql: set[str] = set()
+
+    for match in re.finditer(r"\{", content):
+        try:
+            value, _end = decoder.raw_decode(content[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        call = _tool_call_from_object(value, len(calls) + 1)
+        if not call:
+            continue
+        sql = json.loads(call["function"]["arguments"])["sql"]
+        if sql in seen_sql:
+            continue
+        seen_sql.add(sql)
+        calls.append(call)
+
+    return calls
 
 
 def requested_event_limit(question: str, default: int = 5) -> int:
@@ -271,8 +388,18 @@ def is_more_results_request(question: str) -> bool:
     return bool(MORE_RESULTS_PATTERN.search(question))
 
 
+def wants_open_rsvps(question: str) -> bool:
+    return bool(OPEN_RSVP_PATTERN.search(question))
+
+
+def event_search_text(question: str) -> str:
+    text = OPEN_RSVP_PATTERN.sub(" ", question)
+    text = RSVP_LINK_PHRASE_PATTERN.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def keyword_terms(question: str) -> list[str]:
-    words = re.findall(r"[a-z0-9]+", question.lower())
+    words = re.findall(r"[a-z0-9]+", event_search_text(question).lower())
     stop_words = {
         "a",
         "an",
@@ -283,6 +410,7 @@ def keyword_terms(question: str) -> list[str]:
         "event",
         "find",
         "for",
+        "have",
         "involving",
         "involve",
         "involved",
@@ -292,9 +420,11 @@ def keyword_terms(question: str) -> list[str]:
         "of",
         "or",
         "show",
+        "still",
         "the",
         "to",
         "top",
+        "with",
     }
     terms = [word for word in words if len(word) > 2 and word not in stop_words]
     if "ai" in words and "ai" not in terms:
@@ -324,6 +454,14 @@ def expanded_keyword_terms(question: str) -> list[str]:
     return terms[:12]
 
 
+def _clickhouse_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _clickhouse_array(values: list[str]) -> str:
+    return "[" + ", ".join(_clickhouse_string(value) for value in values) + "]"
+
+
 def build_keyword_event_query(
     question: str,
     *,
@@ -335,6 +473,16 @@ def build_keyword_event_query(
     if not terms:
         terms = ["ai", "agent"]
 
+    phrase = " ".join(keyword_terms(question))
+    terms_array = _clickhouse_array(terms)
+    phrase_sql = _clickhouse_string(phrase)
+    availability_filter = ""
+    if wants_open_rsvps(question):
+        availability_filter = """
+  AND rsvp_url != ''
+  AND NOT at_capacity
+  AND (remaining_capacity IS NULL OR remaining_capacity > 0)
+""".rstrip()
     conditions = []
     score_parts = []
     for term in terms:
@@ -359,6 +507,9 @@ def build_keyword_event_query(
     score = " + ".join(score_parts)
     where = " OR ".join(conditions)
     return f"""
+WITH
+  {terms_array} AS query_terms,
+  {phrase_sql} AS query_phrase
 SELECT
   title,
   event_date,
@@ -369,11 +520,40 @@ SELECT
   rsvp_url,
   going_guest_count,
   left(description, 500) AS description_excerpt,
-  ({score}) AS relevance_score
+  left(retrieval_text, 900) AS retrieval_context,
+  term_overlap,
+  (
+    ({score}) +
+    term_overlap * 4 +
+    multiIf(query_phrase != '' AND positionCaseInsensitive(retrieval_text, query_phrase) > 0, 12, 0)
+  ) AS relevance_score
+FROM
+(
+SELECT
+  *,
+  arrayCount(term -> positionCaseInsensitive(retrieval_text, term) > 0, query_terms) AS term_overlap
+FROM
+(
+SELECT
+  *,
+  concat(
+    coalesce(title, ''), ' ',
+    coalesce(description, ''), ' ',
+    coalesce(markdown_body, ''), ' ',
+    coalesce(host, ''), ' ',
+    coalesce(neighborhood, ''), ' ',
+    coalesce(venue_name, ''), ' ',
+    coalesce(venue_address, ''), ' ',
+    arrayStringConcat(badges, ' ')
+  ) AS retrieval_text
 FROM nytw_events
 WHERE fetch_status = 'ok'
   AND NOT canceled
-  AND ({where})
+{availability_filter}
+)
+)
+WHERE term_overlap > 0
+  OR ({where})
 ORDER BY relevance_score DESC, coalesce(going_guest_count, 0) DESC
 LIMIT {limit}
 {f"OFFSET {offset}" if offset else ""}
@@ -422,7 +602,11 @@ def format_event_rows(
         location = row.get("venue_name") or row.get("neighborhood") or "location TBD"
         if row.get("venue_name") and row.get("neighborhood"):
             location = f"{row['venue_name']}, {row['neighborhood']}"
-        reason = compact_text(row.get("description_excerpt") or row.get("description"))
+        reason = compact_text(
+            row.get("description_excerpt")
+            or row.get("retrieval_context")
+            or row.get("description")
+        )
         rsvp_url = row.get("rsvp_url") or row.get("public_short_url") or ""
         lines.append(f"**{title}** — {date}, {time} — {location} — {reason} — {rsvp_url}")
 
@@ -438,21 +622,26 @@ class NytwSubconsciousAgent:
         *,
         clickhouse: ClickHouseService | None = None,
         subconscious: SubconsciousConfig,
-        senso: SensoService | None = None,
     ) -> None:
         self.clickhouse = clickhouse
         self.subconscious = subconscious
-        self.senso = senso
+        self._clickhouse_lock = threading.Lock()
 
     @classmethod
     def from_env(cls) -> "NytwSubconsciousAgent":
-        senso_config = SensoConfig.from_env()
         return cls(
             subconscious=SubconsciousConfig.from_env(),
-            senso=SensoService(senso_config) if senso_config else None,
         )
 
-    def ask(self, question: str, *, event_offset: int = 0, max_turns: int = 8) -> str:
+    def ask(
+        self,
+        question: str,
+        *,
+        event_offset: int = 0,
+        max_turns: int = 8,
+        stream_callback: Callable[[str], None] | None = None,
+        raw_stream_callback: Callable[[str], None] | None = None,
+    ) -> str:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": NYTW_AGENT_SYSTEM_PROMPT},
             {"role": "user", "content": question},
@@ -474,15 +663,12 @@ class NytwSubconsciousAgent:
                 more_hint=True,
             )
 
-        if self.senso and not likely_nytw_data_question(question):
-            answer = self._answer_from_senso(question)
-            if answer:
-                return answer
-
         for _ in range(max_turns):
             response = self._chat(messages, tools=[QUERY_TOOL])
             message = response["choices"][0]["message"]
             tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                tool_calls = extract_embedded_tool_calls(message.get("content") or "")
 
             if not tool_calls and looks_like_planning_leak(message.get("content") or ""):
                 messages.append(
@@ -510,24 +696,62 @@ class NytwSubconsciousAgent:
                     }
                 )
             messages.append({"role": "user", "content": FINAL_FORMAT_PROMPT})
+            if stream_callback:
+                response = self._chat(
+                    messages,
+                    stream_callback=stream_callback,
+                    raw_stream_callback=raw_stream_callback,
+                )
+                message = response["choices"][0]["message"]
+                content = message.get("content") or ""
+                if looks_like_planning_leak(content):
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": FINAL_FORMAT_PROMPT})
+                    continue
+                return clean_model_answer(content)
 
         raise RuntimeError("Agent did not finish within max_turns")
+
+    def start_clickhouse_warmup(
+        self,
+        *,
+        error_callback: Callable[[Exception], None] | None = None,
+    ) -> threading.Thread:
+        def warm() -> None:
+            try:
+                self._ensure_clickhouse().ping()
+            except Exception as exc:
+                if error_callback:
+                    error_callback(exc)
+
+        thread = threading.Thread(target=warm, name="clickhouse-warmup", daemon=True)
+        thread.start()
+        return thread
 
     def _chat(
         self,
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]] | None = None,
+        stream_callback: Callable[[str], None] | None = None,
+        raw_stream_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.subconscious.model,
             "messages": messages,
             "max_tokens": self.subconscious.max_tokens,
             "temperature": 0.2,
+            "chat_template_kwargs": {
+                "enable_thinking": self.subconscious.enable_thinking,
+            },
         }
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+        if stream_callback:
+            body["stream"] = True
+            body["stream_options"] = {"include_usage": True}
+            return self._chat_stream(body, stream_callback, raw_stream_callback)
 
         request = urllib.request.Request(
             f"{self.subconscious.base_url.rstrip('/')}/chat/completions",
@@ -548,6 +772,72 @@ class NytwSubconsciousAgent:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Subconscious API network error: {exc}") from exc
 
+    def _chat_stream(
+        self,
+        body: dict[str, Any],
+        stream_callback: Callable[[str], None],
+        raw_stream_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        request = urllib.request.Request(
+            f"{self.subconscious.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.subconscious.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+            },
+            method="POST",
+        )
+
+        full_content = ""
+        visible_sent = ""
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") == "error":
+                        raise RuntimeError(f"Subconscious stream error: {event.get('error')}")
+                    if event.get("type") == "delta":
+                        chunk = str(event.get("content") or "")
+                    else:
+                        choices = event.get("choices") or []
+                        delta = choices[0].get("delta", {}) if choices else {}
+                        chunk = str(delta.get("content") or "")
+                    if not chunk:
+                        continue
+                    full_content += chunk
+                    if raw_stream_callback:
+                        raw_stream_callback(chunk)
+                    visible = visible_stream_content(full_content)
+                    if len(visible) > len(visible_sent):
+                        visible_sent = visible
+                        stream_callback(visible.strip())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Subconscious API error {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Subconscious API network error: {exc}") from exc
+
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": full_content,
+                    }
+                }
+            ]
+        }
+
     def _handle_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         function = tool_call.get("function", {})
         if function.get("name") != "query_nytw_clickhouse":
@@ -562,9 +852,7 @@ class NytwSubconsciousAgent:
     def _query_sql(self, sql: str) -> dict[str, Any]:
         try:
             safe_sql = add_default_limit(validate_nytw_query(sql))
-            if self.clickhouse is None:
-                self.clickhouse = ClickHouseService(ClickHouseConfig.from_env())
-            rows = self.clickhouse.query(safe_sql)
+            rows = self._ensure_clickhouse().query(safe_sql)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -575,9 +863,8 @@ class NytwSubconsciousAgent:
             "rows": rows,
         }
 
-    def _answer_from_senso(self, question: str) -> str:
-        try:
-            result = self.senso.search(question) if self.senso else {}
-        except Exception as exc:
-            return f"Senso search failed: {exc}"
-        return format_senso_answer(result)
+    def _ensure_clickhouse(self) -> ClickHouseService:
+        with self._clickhouse_lock:
+            if self.clickhouse is None:
+                self.clickhouse = ClickHouseService(ClickHouseConfig.from_env())
+            return self.clickhouse
