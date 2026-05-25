@@ -16,7 +16,7 @@ from .cloud import ClickHouseCloudClient, ClickHouseCloudConfig
 from .conversation import AgentConversation
 from .config import ClickHouseConfig
 from .geocode import geocode_city
-from .geojson_export import build_geojson
+from .geojson_export import build_gallery, build_geojson
 from .nytw import NytwDataset, inspect_nytw_dataset, load_nytw_dataset
 from .rendering import render_terminal_markdown
 from .senso import SensoConfig, SensoService, sync_senso_kb
@@ -196,6 +196,13 @@ def geocode_venues(args: argparse.Namespace) -> int:
 def export_geojson(args: argparse.Namespace) -> int:
     _ = args
     result = build_geojson()
+    _print_json(result)
+    return 0
+
+
+def export_gallery(args: argparse.Namespace) -> int:
+    _ = args
+    result = build_gallery()
     _print_json(result)
     return 0
 
@@ -393,6 +400,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Join events + venues.json into events.geojson for the map page",
     )
     geojson_parser.set_defaults(func=export_geojson)
+
+    gallery_parser = subparsers.add_parser(
+        "build-gallery",
+        help="Emit docs/<city>_gallery.json for the image gallery page",
+    )
+    gallery_parser.set_defaults(func=export_gallery)
 
     return parser
 
