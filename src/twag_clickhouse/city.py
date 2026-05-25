@@ -19,6 +19,12 @@ class CityConfig:
     example_neighborhood: str
     example_date: str
     neighborhoods_regex: str
+    # Map view config
+    map_center_lat: float
+    map_center_lon: float
+    map_zoom: float
+    map_html_filename: str
+    default_map_date: str
 
 
 NYC = CityConfig(
@@ -45,6 +51,11 @@ NYC = CityConfig(
         r"chelsea|flatiron|midtown|downtown|chinatown|"
         r"east\s+village|west\s+village|lower\s+east\s+side"
     ),
+    map_center_lat=40.7549,
+    map_center_lon=-73.9840,
+    map_zoom=11.5,
+    map_html_filename="events_map_nyc.html",
+    default_map_date="2026-06-02",
 )
 
 
@@ -73,6 +84,11 @@ BOSTON = CityConfig(
         r"downtown|north\s+end|beacon\s+hill|financial\s+district|"
         r"east\s+boston|south\s+boston|jamaica\s+plain"
     ),
+    map_center_lat=42.3601,
+    map_center_lon=-71.0942,
+    map_zoom=12.0,
+    map_html_filename="events_map_boston.html",
+    default_map_date="2026-05-26",
 )
 
 

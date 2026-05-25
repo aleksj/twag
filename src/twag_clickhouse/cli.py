@@ -15,6 +15,8 @@ from .client import ClickHouseService
 from .cloud import ClickHouseCloudClient, ClickHouseCloudConfig
 from .conversation import AgentConversation
 from .config import ClickHouseConfig
+from .geocode import geocode_city
+from .geojson_export import build_geojson
 from .nytw import NytwDataset, inspect_nytw_dataset, load_nytw_dataset
 from .rendering import render_terminal_markdown
 from .senso import SensoConfig, SensoService, sync_senso_kb
@@ -183,6 +185,19 @@ def deploy_nytw_agent(args: argparse.Namespace) -> int:
 
 def run_telegram_nytw_agent(_: argparse.Namespace) -> int:
     return run_telegram_agent()
+
+
+def geocode_venues(args: argparse.Namespace) -> int:
+    result = geocode_city(refresh=args.refresh, limit=args.limit)
+    _print_json(result)
+    return 0
+
+
+def export_geojson(args: argparse.Namespace) -> int:
+    _ = args
+    result = build_geojson()
+    _print_json(result)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -355,6 +370,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the TWAG agent as a Telegram long-polling bot",
     )
     telegram_agent_parser.set_defaults(func=run_telegram_nytw_agent)
+
+    geocode_parser = subparsers.add_parser(
+        "geocode-venues",
+        help="Geocode each event venue via OpenCage and cache to venues.json",
+    )
+    geocode_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-geocode every venue, ignoring the existing cache",
+    )
+    geocode_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only geocode the first N events (debug)",
+    )
+    geocode_parser.set_defaults(func=geocode_venues)
+
+    geojson_parser = subparsers.add_parser(
+        "build-geojson",
+        help="Join events + venues.json into events.geojson for the map page",
+    )
+    geojson_parser.set_defaults(func=export_geojson)
 
     return parser
 
