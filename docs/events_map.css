@@ -100,13 +100,17 @@ header h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
 .tile {
   display: flex;
   flex-direction: column;
+  align-self: start;        /* don't let grid stretch us to row height */
+  min-height: 300px;        /* 220 img + ~80 body, guarantees the wrap can't be compressed */
   background: #fff;
   border-radius: 8px;
-  overflow: hidden;
   text-decoration: none;
   color: inherit;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
   transition: transform 0.15s, box-shadow 0.15s;
+}
+.tile-img-wrap, .tile-overlay {
+  border-radius: 8px 8px 0 0; /* keep the top corners rounded without overflow:hidden */
 }
 .tile:hover {
   transform: translateY(-2px);
