@@ -113,11 +113,14 @@ header h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 .tile-img-wrap {
+  display: block;
   width: 100%;
-  padding-top: 100%;       /* classic 1:1 box that works in every grid layout */
+  height: 220px;           /* fallback for the % padding / aspect-ratio dance */
+  aspect-ratio: 1 / 1;     /* square at any column width */
   background: #ddd;
   overflow: hidden;
   position: relative;
+  flex: 0 0 auto;          /* don't let the flex parent collapse us */
 }
 
 .tile-overlay {
