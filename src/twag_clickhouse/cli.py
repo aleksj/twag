@@ -17,6 +17,7 @@ from .conversation import AgentConversation
 from .config import ClickHouseConfig
 from .geocode import geocode_city
 from .geojson_export import build_gallery, build_geojson
+from .thumbnails import build_thumbnails
 from .nytw import NytwDataset, inspect_nytw_dataset, load_nytw_dataset
 from .rendering import render_terminal_markdown
 from .senso import SensoConfig, SensoService, sync_senso_kb
@@ -203,6 +204,12 @@ def export_geojson(args: argparse.Namespace) -> int:
 def export_gallery(args: argparse.Namespace) -> int:
     _ = args
     result = build_gallery()
+    _print_json(result)
+    return 0
+
+
+def make_thumbnails(args: argparse.Namespace) -> int:
+    result = build_thumbnails(refresh=args.refresh)
     _print_json(result)
     return 0
 
@@ -406,6 +413,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit docs/<city>_gallery.json for the image gallery page",
     )
     gallery_parser.set_defaults(func=export_gallery)
+
+    thumbs_parser = subparsers.add_parser(
+        "build-thumbnails",
+        help="Resize event images into docs/<city>/thumbs/ (~400px JPEG) for the gallery",
+    )
+    thumbs_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-render every thumb, ignoring existing files",
+    )
+    thumbs_parser.set_defaults(func=make_thumbnails)
 
     return parser
 

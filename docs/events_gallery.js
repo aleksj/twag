@@ -49,10 +49,31 @@ function renderTile(event) {
   const where = [event.venue_name, event.neighborhood].filter(Boolean).join(" · ");
   const cap = event.at_capacity ? `<span class="tile-cap">at capacity</span>` : "";
   const href = event.rsvp_url || "#";
+  const going = (typeof event.going_guest_count === "number")
+    ? `<span class="overlay-stat">${event.going_guest_count} going</span>`
+    : "";
+  const remaining = (typeof event.remaining_capacity === "number" && event.remaining_capacity > 0)
+    ? `<span class="overlay-stat">${event.remaining_capacity} spots left</span>`
+    : "";
+  const description = event.description
+    ? `<div class="overlay-desc">${escapeHtmlG(event.description)}</div>`
+    : "";
+  const stats = (going || remaining)
+    ? `<div class="overlay-stats">${going}${remaining}</div>`
+    : "";
   return `
     <a class="tile" href="${escapeHtmlG(href)}" target="_blank" rel="noopener">
       <div class="tile-img-wrap">
         <img class="tile-img" loading="lazy" src="${escapeHtmlG(event.image)}" alt="${escapeHtmlG(event.title)}">
+        <div class="tile-overlay">
+          <div class="overlay-title">${escapeHtmlG(event.title)}</div>
+          <div class="overlay-when">${escapeHtmlG(time)}</div>
+          <div class="overlay-where">${escapeHtmlG(where)}</div>
+          ${event.host ? `<div class="overlay-host">Hosted by ${escapeHtmlG(event.host)}</div>` : ""}
+          ${stats}
+          ${description}
+          <div class="overlay-cta">Tap to RSVP →</div>
+        </div>
       </div>
       <div class="tile-body">
         <div class="tile-title">${escapeHtmlG(event.title)} ${cap}</div>

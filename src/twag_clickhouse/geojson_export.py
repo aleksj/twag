@@ -13,6 +13,7 @@ from typing import Any
 
 from .city import CityConfig, active_city
 from .nytw import NytwDataset, parse_event_file
+from .thumbnails import thumb_exists, thumb_relative_url
 
 
 def _venues_path(city: CityConfig) -> Path:
@@ -142,14 +143,23 @@ def build_gallery(city: CityConfig | None = None) -> dict[str, Any]:
         if event.get("fetch_status") != "ok":
             counts["stub"] += 1
             continue
-        image = event.get("image") or ""
-        if not image:
+        event_id = event["event_id"]
+        firebase_image = event.get("image") or ""
+        if thumb_exists(city, event_id):
+            image = thumb_relative_url(city, event_id)
+        elif firebase_image:
+            image = firebase_image
+        else:
             counts["no_image"] += 1
             continue
 
+        description = (event.get("description") or "").strip()
+        if len(description) > 600:
+            description = description[:597].rstrip() + "…"
+
         entries.append(
             {
-                "event_id": event["event_id"],
+                "event_id": event_id,
                 "title": event.get("title") or "",
                 "image": image,
                 "rsvp_url": (
@@ -164,6 +174,9 @@ def build_gallery(city: CityConfig | None = None) -> dict[str, Any]:
                 "neighborhood": event.get("neighborhood") or "",
                 "venue_name": event.get("venue_name") or "",
                 "at_capacity": bool(event.get("at_capacity")),
+                "description": description,
+                "going_guest_count": event.get("going_guest_count"),
+                "remaining_capacity": event.get("remaining_capacity"),
             }
         )
         counts["included"] += 1
