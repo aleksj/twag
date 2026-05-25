@@ -8,10 +8,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from .city import active_city
 from .client import ClickHouseService
 
 
 PLATFORM_ADMIN_ID = "7DFu4rITofNzKIjA7hCx"
+DEFAULT_TABLE_PREFIX = "nytw"
 FRONTMATTER_RE = re.compile(r"^---\n(.+?)\n---\n(.*)", re.S)
 DESCRIPTION_RE = re.compile(r"\n## Description\n(.*?)(?:\n---\n\n\[(?:Apply|RSVP) on Partiful)", re.S)
 
@@ -353,10 +355,11 @@ def batched(rows: Iterator[tuple[Any, ...]], size: int) -> Iterator[list[tuple[A
         yield batch
 
 
-def create_nytw_tables(service: ClickHouseService) -> None:
+def create_nytw_tables(service: ClickHouseService, prefix: str | None = None) -> None:
+    prefix = prefix or active_city().table_prefix
     service.command(
-        """
-        CREATE TABLE IF NOT EXISTS nytw_events
+        f"""
+        CREATE TABLE IF NOT EXISTS {prefix}_events
         (
             event_id String,
             source_path String,
@@ -405,8 +408,8 @@ def create_nytw_tables(service: ClickHouseService) -> None:
         """
     )
     service.command(
-        """
-        CREATE TABLE IF NOT EXISTS nytw_hosts
+        f"""
+        CREATE TABLE IF NOT EXISTS {prefix}_hosts
         (
             user_id String,
             name String,
@@ -424,8 +427,8 @@ def create_nytw_tables(service: ClickHouseService) -> None:
         """
     )
     service.command(
-        """
-        CREATE TABLE IF NOT EXISTS nytw_event_hosts
+        f"""
+        CREATE TABLE IF NOT EXISTS {prefix}_event_hosts
         (
             event_id String,
             user_id String,
@@ -437,8 +440,8 @@ def create_nytw_tables(service: ClickHouseService) -> None:
         """
     )
     service.command(
-        """
-        CREATE TABLE IF NOT EXISTS nytw_manifest
+        f"""
+        CREATE TABLE IF NOT EXISTS {prefix}_manifest
         (
             event_id String,
             url String,
@@ -456,14 +459,16 @@ def create_nytw_tables(service: ClickHouseService) -> None:
     )
 
 
-def truncate_nytw_tables(service: ClickHouseService) -> None:
-    for table in ("nytw_events", "nytw_hosts", "nytw_event_hosts", "nytw_manifest"):
-        service.command(f"TRUNCATE TABLE IF EXISTS {table}")
+def truncate_nytw_tables(service: ClickHouseService, prefix: str | None = None) -> None:
+    prefix = prefix or active_city().table_prefix
+    for suffix in ("events", "hosts", "event_hosts", "manifest"):
+        service.command(f"TRUNCATE TABLE IF EXISTS {prefix}_{suffix}")
 
 
-def drop_nytw_tables(service: ClickHouseService) -> None:
-    for table in ("nytw_events", "nytw_hosts", "nytw_event_hosts", "nytw_manifest"):
-        service.command(f"DROP TABLE IF EXISTS {table}")
+def drop_nytw_tables(service: ClickHouseService, prefix: str | None = None) -> None:
+    prefix = prefix or active_city().table_prefix
+    for suffix in ("events", "hosts", "event_hosts", "manifest"):
+        service.command(f"DROP TABLE IF EXISTS {prefix}_{suffix}")
 
 
 def insert_all(
@@ -486,25 +491,31 @@ def load_nytw_dataset(
     *,
     replace: bool = False,
     batch_size: int = 500,
+    prefix: str | None = None,
 ) -> dict[str, int]:
+    prefix = prefix or active_city().table_prefix
     dataset.validate()
     if replace:
-        drop_nytw_tables(service)
-    create_nytw_tables(service)
+        drop_nytw_tables(service, prefix=prefix)
+    create_nytw_tables(service, prefix=prefix)
 
     return {
-        "events": insert_all(service, "nytw_events", event_rows(dataset), EVENT_COLUMNS, batch_size),
-        "hosts": insert_all(service, "nytw_hosts", host_rows(dataset), HOST_COLUMNS, batch_size),
+        "events": insert_all(
+            service, f"{prefix}_events", event_rows(dataset), EVENT_COLUMNS, batch_size
+        ),
+        "hosts": insert_all(
+            service, f"{prefix}_hosts", host_rows(dataset), HOST_COLUMNS, batch_size
+        ),
         "event_hosts": insert_all(
             service,
-            "nytw_event_hosts",
+            f"{prefix}_event_hosts",
             event_host_rows(dataset),
             EVENT_HOST_COLUMNS,
             batch_size,
         ),
         "manifest": insert_all(
             service,
-            "nytw_manifest",
+            f"{prefix}_manifest",
             manifest_rows(dataset),
             MANIFEST_COLUMNS,
             batch_size,

@@ -179,7 +179,7 @@ def test_answer_message_with_status_sends_progress_updates():
     assert callable(agent.questions[0][1]["stream_callback"])
     assert callable(agent.questions[0][1]["progress_callback"])
     assert "Route: ClickHouse event search" in telegram.sent[0][1]
-    assert any("NYTW search pipeline" in edit[2] for edit in telegram.edits)
+    assert any("NY Tech Week search pipeline" in edit[2] for edit in telegram.edits)
     assert telegram.edits[-1][2].endswith("Done.")
     assert states[123].active_question is None
     assert states[123].status_message_id is None

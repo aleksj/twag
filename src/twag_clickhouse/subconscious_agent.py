@@ -10,6 +10,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .city import CityConfig, active_city
 from .client import ClickHouseService
 from .config import ClickHouseConfig
 
@@ -28,20 +29,30 @@ FORBIDDEN_SQL = re.compile(
 
 READ_ONLY_START = re.compile(r"^\s*(select|with|show|describe|desc|explain)\b", re.IGNORECASE)
 LIMIT_PATTERN = re.compile(r"\blimit\b", re.IGNORECASE)
-AGENT_TABLE_PATTERN = re.compile(
-    r"\b("
-    r"nytw_(events|hosts|event_hosts|manifest)|"
-    r"senso_(kb_nodes|kb_documents|kb_chunks|sync_runs)"
-    r")\b",
-    re.IGNORECASE,
-)
-PLANNING_LEAK_PATTERN = re.compile(
-    r"\b("
-    r"the user is asking|i need to|i should|i will|let'?s|query:|"
-    r"clickhouse|sql query|tool call|query_nytw_clickhouse|execute"
-    r")\b",
-    re.IGNORECASE,
-)
+def _agent_table_pattern(prefix: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"\b("
+        rf"{prefix}_(events|hosts|event_hosts|manifest)|"
+        r"senso_(kb_nodes|kb_documents|kb_chunks|sync_runs)"
+        r")\b",
+        re.IGNORECASE,
+    )
+
+
+def _planning_leak_pattern(tool_name: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"\b("
+        r"the user is asking|i need to|i should|i will|let'?s|query:|"
+        rf"clickhouse|sql query|tool call|{re.escape(tool_name)}|execute"
+        r")\b",
+        re.IGNORECASE,
+    )
+
+
+# Back-compat: keep module-level patterns wired to the active city. These are
+# reread per-call inside the agent methods, so they stay aligned with TWAG_CITY.
+AGENT_TABLE_PATTERN = _agent_table_pattern(active_city().table_prefix)
+PLANNING_LEAK_PATTERN = _planning_leak_pattern(active_city().tool_name)
 EVENT_LIST_COMMAND_PATTERN = re.compile(
     r"\b(top|best|recommend|show|find|list|shortlist)\b",
     re.IGNORECASE,
@@ -55,15 +66,12 @@ NYTW_EVENT_DATA_PATTERN = re.compile(
     r"\b(events?|hosts?|rsvp|venue|venues|neighborhood|capacity)\b",
     re.IGNORECASE,
 )
-NYTW_LOCATION_PATTERN = re.compile(
-    r"\b("
-    r"soho|tribeca|brooklyn|manhattan|williamsburg|"
-    r"upper\s+west\s+side|uws|upper\s+east\s+side|ues|"
-    r"chelsea|flatiron|midtown|downtown|chinatown|"
-    r"east\s+village|west\s+village|lower\s+east\s+side"
-    r")\b",
-    re.IGNORECASE,
-)
+def _location_pattern(neighborhoods_regex: str) -> re.Pattern[str]:
+    return re.compile(rf"\b({neighborhoods_regex})\b", re.IGNORECASE)
+
+
+# Back-compat constant; rebuilt from the active city's neighborhood regex.
+NYTW_LOCATION_PATTERN = _location_pattern(active_city().neighborhoods_regex)
 EVENT_LOCATION_SEARCH_PATTERN = re.compile(
     r"\bevents?\b.*\b(in|near|around|at)\b|\b(in|near|around|at)\b.*\bevents?\b",
     re.IGNORECASE,
@@ -86,17 +94,17 @@ RSVP_LINK_PHRASE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-NYTW_AGENT_SYSTEM_PROMPT = """
-You are NYTechWeek ClickHouse Agent, a data analyst for the NY Tech Week 2026
+_SYSTEM_PROMPT_TEMPLATE = """
+You are {agent_name}, a data analyst for the {display_name}
 dataset loaded into ClickHouse.
 
-Use the query_nytw_clickhouse tool whenever the user asks for facts, counts,
+Use the {tool_name} tool whenever the user asks for facts, counts,
 rankings, filtering, recommendations, or analysis that depends on the data.
 Do not invent event data. Query the database first, then answer from the rows.
 
 Available ClickHouse tables:
 
-nytw_events:
+{prefix}_events:
 - event_id, title, event_date, day, start_time, end_time, start_at, end_at
 - host, neighborhood, venue_name, venue_address
 - rsvp_url, public_short_url, google_maps
@@ -106,14 +114,14 @@ nytw_events:
 - canceled_at, canceled_by, cancellation_message
 - description, markdown_body, frontmatter_json, raw_markdown
 
-nytw_hosts:
+{prefix}_hosts:
 - user_id, name, bio, bio_visibility, photo, is_managed, on_partiful
 - socials_json, tags, raw_json
 
-nytw_event_hosts:
+{prefix}_event_hosts:
 - event_id, user_id, host_position, is_platform_admin
 
-nytw_manifest:
+{prefix}_manifest:
 - event_id, url, title, host, date_time, neighborhood, badges, source, raw_json
 
 senso_kb_nodes:
@@ -132,14 +140,15 @@ senso_sync_runs:
 
 Important query rules:
 - Event queries are primary. For event discovery, ranking, counts, schedules,
-  capacity, venue, host, RSVP, or neighborhood questions, query nytw_* tables
-  first and prefer nytw_* over Senso.
+  capacity, venue, host, RSVP, or neighborhood questions, query {prefix}_* tables
+  first and prefer {prefix}_* over Senso.
 - Use reasoning only to decide what information to retrieve and how to query it.
   Do not spend reasoning tokens on prose style, formatting, or how to phrase the
   final response.
 - Senso is mirrored into ClickHouse as senso_* tables. Never call Senso
   directly. Use senso_* only for general-purpose Tech Week context, policy,
-  background, or explanatory questions that the NYTW event rows cannot answer.
+  background, or explanatory questions that the {prefix}_* event rows cannot
+  answer.
 - Prefer live events: fetch_status = 'ok' AND NOT canceled.
 - For "open RSVP", "spots left", or "not full" questions, filter to events
   with rsvp_url != '', NOT at_capacity, and remaining_capacity IS NULL or > 0.
@@ -162,13 +171,34 @@ Answer contract:
 - For counts, answer in one sentence.
 - If no strong matches are found, say that directly and give the closest
   alternatives in compact bullets.
-""".strip()
+"""
 
-RETRY_AFTER_PLANNING_PROMPT = """
+
+_RETRY_AFTER_PLANNING_TEMPLATE = """
 Your previous response exposed planning instead of using the tool.
-Do not explain your process. Call query_nytw_clickhouse now, then return only
+Do not explain your process. Call {tool_name} now, then return only
 the final concise answer following the answer contract.
-""".strip()
+"""
+
+
+def build_system_prompt(city: CityConfig | None = None) -> str:
+    city = city or active_city()
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        agent_name=city.agent_name,
+        display_name=city.display_name,
+        tool_name=city.tool_name,
+        prefix=city.table_prefix,
+    ).strip()
+
+
+def build_retry_after_planning_prompt(city: CityConfig | None = None) -> str:
+    city = city or active_city()
+    return _RETRY_AFTER_PLANNING_TEMPLATE.format(tool_name=city.tool_name).strip()
+
+
+# Back-compat constants pinned to the active city at import time.
+NYTW_AGENT_SYSTEM_PROMPT = build_system_prompt()
+RETRY_AFTER_PLANNING_PROMPT = build_retry_after_planning_prompt()
 
 FINAL_FORMAT_PROMPT = """
 Rewrite the answer for the user.
@@ -186,31 +216,37 @@ Continue from where it stopped and finish the answer. Do not restart.
 If you were reasoning, complete the reasoning and include the final answer.
 """.strip()
 
-QUERY_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "query_nytw_clickhouse",
-        "description": (
-            "Run one read-only ClickHouse SQL query against NYTechWeek event "
-            "tables and synced Senso knowledge-base tables, then return JSON rows."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sql": {
-                    "type": "string",
-                    "description": (
-                        "A single read-only SQL statement using nytw_* tables "
-                        "or synced senso_* tables. Use nytw_* first for event "
-                        "questions."
-                    ),
-                }
+def build_query_tool(city: CityConfig | None = None) -> dict[str, Any]:
+    city = city or active_city()
+    return {
+        "type": "function",
+        "function": {
+            "name": city.tool_name,
+            "description": (
+                f"Run one read-only ClickHouse SQL query against {city.display_name} "
+                "event tables and synced Senso knowledge-base tables, then return JSON rows."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": (
+                            f"A single read-only SQL statement using {city.table_prefix}_* "
+                            f"tables or synced senso_* tables. Use {city.table_prefix}_* "
+                            "first for event questions."
+                        ),
+                    }
+                },
+                "required": ["sql"],
+                "additionalProperties": False,
             },
-            "required": ["sql"],
-            "additionalProperties": False,
         },
-    },
-}
+    }
+
+
+# Back-compat constant for code that imports QUERY_TOOL directly.
+QUERY_TOOL = build_query_tool()
 
 
 @dataclass(frozen=True)
@@ -249,7 +285,9 @@ class UnsafeQueryError(ValueError):
     pass
 
 
-def validate_nytw_query(sql: str) -> str:
+def validate_nytw_query(sql: str, *, prefix: str | None = None) -> str:
+    prefix = prefix or active_city().table_prefix
+    table_pattern = _agent_table_pattern(prefix)
     normalized = sql.strip()
     if not normalized:
         raise UnsafeQueryError("SQL query is empty")
@@ -269,8 +307,8 @@ def validate_nytw_query(sql: str) -> str:
         normalized,
         re.IGNORECASE,
     )
-    if not starts_with_table_inspection and not AGENT_TABLE_PATTERN.search(normalized):
-        raise UnsafeQueryError("Query must reference a nytw_* or senso_* table")
+    if not starts_with_table_inspection and not table_pattern.search(normalized):
+        raise UnsafeQueryError(f"Query must reference a {prefix}_* or senso_* table")
 
     return normalized
 
@@ -369,7 +407,8 @@ def _tool_call_from_object(value: Any, index: int) -> dict[str, Any] | None:
 
     function = value.get("function") if isinstance(value.get("function"), dict) else value
     name = function.get("name")
-    if name != "query_nytw_clickhouse":
+    tool_name = active_city().tool_name
+    if name != tool_name:
         return None
 
     arguments = function.get("arguments") or value.get("arguments") or value.get("parameters")
@@ -392,7 +431,7 @@ def _tool_call_from_object(value: Any, index: int) -> dict[str, Any] | None:
     return {
         "id": value.get("id") or f"embedded-tool-call-{index}",
         "function": {
-            "name": "query_nytw_clickhouse",
+            "name": tool_name,
             "arguments": json.dumps({"sql": sql}),
         },
     }
@@ -400,7 +439,7 @@ def _tool_call_from_object(value: Any, index: int) -> dict[str, Any] | None:
 
 def extract_embedded_tool_calls(content: str) -> list[dict[str, Any]]:
     """Recover tool calls that some thinking models emit as content JSON."""
-    if "query_nytw_clickhouse" not in content:
+    if active_city().tool_name not in content:
         return []
 
     decoder = json.JSONDecoder()
@@ -611,7 +650,7 @@ SELECT
     coalesce(venue_address, ''), ' ',
     arrayStringConcat(badges, ' ')
   ) AS retrieval_text
-FROM nytw_events
+FROM {active_city().table_prefix}_events
 WHERE fetch_status = 'ok'
   AND NOT canceled
 {availability_filter}
@@ -709,8 +748,9 @@ class NytwSubconsciousAgent:
         token_usage_callback: TokenUsageCallback | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> str:
+        city = active_city()
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": NYTW_AGENT_SYSTEM_PROMPT},
+            {"role": "system", "content": build_system_prompt(city)},
             {"role": "user", "content": question},
         ]
         response_parts: list[str] = []
@@ -754,10 +794,10 @@ class NytwSubconsciousAgent:
         for _ in range(max_turns):
             if progress_callback:
                 progress_callback(
-                    "Choosing the smallest useful data query across NYTW events "
+                    f"Choosing the smallest useful data query across {city.short_name} events "
                     "and synced Senso context."
                 )
-            response = self._chat(messages, tools=[QUERY_TOOL])
+            response = self._chat(messages, tools=[build_query_tool(city)])
             self._emit_token_usage(response, token_usage_callback)
             message = response["choices"][0]["message"]
             tool_calls = message.get("tool_calls") or []
@@ -1017,7 +1057,7 @@ class NytwSubconsciousAgent:
 
     def _handle_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         function = tool_call.get("function", {})
-        if function.get("name") != "query_nytw_clickhouse":
+        if function.get("name") != active_city().tool_name:
             return {"ok": False, "error": f"Unknown tool: {function.get('name')}"}
 
         try:

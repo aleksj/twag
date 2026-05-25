@@ -10,6 +10,7 @@ try:
 except ImportError:
     load_dotenv = None
 
+from .city import active_city, load_city
 from .client import ClickHouseService
 from .cloud import ClickHouseCloudClient, ClickHouseCloudConfig
 from .conversation import AgentConversation
@@ -65,15 +66,19 @@ def resolve_cloud_service(_: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_source(args: argparse.Namespace) -> str:
+    return args.source or active_city().dataset_path
+
+
 def inspect_nytw(args: argparse.Namespace) -> int:
-    _print_json(inspect_nytw_dataset(NytwDataset.from_path(args.source)))
+    _print_json(inspect_nytw_dataset(NytwDataset.from_path(_resolve_source(args))))
     return 0
 
 
 def load_nytw(args: argparse.Namespace) -> int:
     counts = load_nytw_dataset(
         _service(),
-        NytwDataset.from_path(args.source),
+        NytwDataset.from_path(_resolve_source(args)),
         replace=args.replace,
         batch_size=args.batch_size,
     )
@@ -183,7 +188,12 @@ def run_telegram_nytw_agent(_: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=os.path.basename(sys.argv[0]) if sys.argv else "twag",
-        description="TWAG NY Tech Week ClickHouse agent CLI.",
+        description="TWAG Tech Week ClickHouse agent CLI.",
+    )
+    parser.add_argument(
+        "--city",
+        default=None,
+        help="Override TWAG_CITY for this invocation (e.g. nyc, boston).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -225,8 +235,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect_nytw_parser.add_argument(
         "--source",
-        default="data/nytw-2026-for-agents",
-        help="Path containing events/, users.json, and manifest.json",
+        default=None,
+        help="Path containing events/, users.json, and manifest.json (defaults to the active city's dataset)",
     )
     inspect_nytw_parser.set_defaults(func=inspect_nytw)
 
@@ -236,8 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     load_nytw_parser.add_argument(
         "--source",
-        default="data/nytw-2026-for-agents",
-        help="Path containing events/, users.json, and manifest.json",
+        default=None,
+        help="Path containing events/, users.json, and manifest.json (defaults to the active city's dataset)",
     )
     load_nytw_parser.add_argument(
         "--replace",
@@ -355,6 +365,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.city:
+        load_city(args.city)  # validate
+        os.environ["TWAG_CITY"] = args.city.strip().lower()
 
     try:
         return args.func(args)

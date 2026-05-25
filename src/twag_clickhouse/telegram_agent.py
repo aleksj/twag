@@ -22,6 +22,7 @@ try:
 except ImportError:
     load_dotenv = None
 
+from .city import active_city
 from .conversation import AgentConversation
 from .rendering import markdown_to_telegram_html
 from .subconscious_agent import (
@@ -52,31 +53,38 @@ SUBJECTIVE_QUESTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-SUBJECTIVE_QUESTION_REPLY = (
-    "C'mon, this is NYC, not a vibes committee. I'm not here to crown the "
-    "'best' event or tell you what to do with your afternoon. Give me criteria: "
-    "topic keywords, date, neighborhood, host, capacity, RSVP status, or time. "
-    "Try: 'List AI events in SoHo on June 3' or 'Show cybersecurity events with open RSVPs.'"
-)
 SPONSOR_LINE = (
     "**Sponsored by data.flowers** - the data excellence company.\n"
     "Want to sponsor TechWeek AI search? Contact info@data.flowers"
 )
-HELP_REPLY = (
-    "**TWAG NY Tech Week Bot**\n"
-    "Ask me data-backed questions about TechWeek NY events.\n\n"
-    f"{SPONSOR_LINE}\n\n"
-    "**Try**\n"
-    "- List AI events in SoHo\n"
-    "- Show cybersecurity events with open RSVPs\n"
-    "- Which neighborhoods have the most events?\n"
-    "- more\n\n"
-    "**Commands**\n"
-    "`/help` - show this guide\n"
-    "`/verbose` - show the agent thinking stream\n"
-    "`/quiet` - show only result updates and final answers\n\n"
-    "Use concrete criteria like topic, date, neighborhood, host, capacity, RSVP status, or time."
-)
+
+
+def _subjective_question_reply() -> str:
+    return active_city().vibe_line
+
+
+def _help_reply() -> str:
+    city = active_city()
+    return (
+        f"**TWAG {city.short_name} Bot**\n"
+        f"Ask me data-backed questions about {city.short_name} events.\n\n"
+        f"{SPONSOR_LINE}\n\n"
+        "**Try**\n"
+        f"- List AI events in {city.example_neighborhood}\n"
+        "- Show cybersecurity events with open RSVPs\n"
+        "- Which neighborhoods have the most events?\n"
+        "- more\n\n"
+        "**Commands**\n"
+        "`/help` - show this guide\n"
+        "`/verbose` - show the agent thinking stream\n"
+        "`/quiet` - show only result updates and final answers\n\n"
+        "Use concrete criteria like topic, date, neighborhood, host, capacity, RSVP status, or time."
+    )
+
+
+# Back-compat module constants pinned to the active city at import.
+SUBJECTIVE_QUESTION_REPLY = _subjective_question_reply()
+HELP_REPLY = _help_reply()
 GREETING_REPLY = HELP_REPLY
 
 
@@ -536,7 +544,10 @@ def answer_route(text: str, state: ChatState) -> tuple[str, str]:
         )
     return (
         "ClickHouse agent query",
-        "Letting the agent choose between NYTW event rows and synced Senso knowledge-base context.",
+        (
+            f"Letting the agent choose between {active_city().short_name} event rows "
+            "and synced Senso knowledge-base context."
+        ),
     )
 
 
@@ -567,9 +578,9 @@ def answer_message(
     command = telegram_command(text)
 
     if command == "start":
-        return GREETING_REPLY
+        return _help_reply()
     if command == "help":
-        return HELP_REPLY
+        return _help_reply()
     if command == "verbose":
         state.verbose = True
         return "Verbose mode is on. I'll show the agent thinking stream while I work."
@@ -578,7 +589,7 @@ def answer_message(
         return "Quiet mode is on. I'll show only streamed results and final answers."
 
     if is_subjective_question(text):
-        return SUBJECTIVE_QUESTION_REPLY
+        return _subjective_question_reply()
 
     if is_more_results_request(text):
         if progress:
@@ -592,7 +603,7 @@ def answer_message(
         )
 
     if progress:
-        progress("Handing the request to the NYTW search pipeline.")
+        progress(f"Handing the request to the {active_city().short_name} search pipeline.")
     return state.conversation.answer(
         agent,
         text,

@@ -6,18 +6,25 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from .city import CityConfig, active_city
 from .subconscious_agent import (
     DEFAULT_SUBCONSCIOUS_BASE_URL,
-    NYTW_AGENT_SYSTEM_PROMPT,
+    build_system_prompt,
 )
 
 
-def build_query_tool(tool_url: str, *, tool_token: str | None = None) -> dict[str, Any]:
+def build_query_tool(
+    tool_url: str,
+    *,
+    tool_token: str | None = None,
+    city: CityConfig | None = None,
+) -> dict[str, Any]:
+    city = city or active_city()
     tool: dict[str, Any] = {
         "type": "function",
-        "name": "query_nytw_clickhouse",
+        "name": city.tool_name,
         "description": (
-            "Run one read-only ClickHouse SQL query against remote NYTechWeek "
+            f"Run one read-only ClickHouse SQL query against remote {city.display_name} "
             "event tables and synced Senso knowledge-base tables."
         ),
         "url": tool_url.rstrip("/") + "/query",
@@ -29,8 +36,9 @@ def build_query_tool(tool_url: str, *, tool_token: str | None = None) -> dict[st
                 "sql": {
                     "type": "string",
                     "description": (
-                        "A single read-only SQL statement using nytw_* or "
-                        "synced senso_* tables. Use nytw_* first for event questions."
+                        f"A single read-only SQL statement using {city.table_prefix}_* or "
+                        f"synced senso_* tables. Use {city.table_prefix}_* first for event "
+                        "questions."
                     ),
                 }
             },
@@ -48,12 +56,14 @@ def build_run_payload(
     tool_url: str,
     engine: str = "tim-gpt",
     tool_token: str | None = None,
+    city: CityConfig | None = None,
 ) -> dict[str, Any]:
+    city = city or active_city()
     return {
         "engine": engine,
         "input": {
-            "instructions": f"{NYTW_AGENT_SYSTEM_PROMPT}\n\nUser question: {question}",
-            "tools": [build_query_tool(tool_url, tool_token=tool_token)],
+            "instructions": f"{build_system_prompt(city)}\n\nUser question: {question}",
+            "tools": [build_query_tool(tool_url, tool_token=tool_token, city=city)],
         },
         "options": {"timeout": 1800},
     }

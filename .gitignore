@@ -2,6 +2,8 @@
 .venv/
 .DS_Store
 .telegram-agent.lock
+.telegram-agent-*.lock
+logs/
 __pycache__/
 *.py[cod]
 .pytest_cache/
