@@ -1,0 +1,59 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+body { display: flex; flex-direction: column; }
+
+header {
+  padding: 12px 16px;
+  background: #1a1a1a;
+  color: #fff;
+  border-bottom: 1px solid #333;
+}
+header h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+#count { font-size: 13px; color: #aaa; }
+
+#date-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+}
+.date-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.date-btn.active { background: #e8543e; color: #fff; border-color: #e8543e; }
+.date-btn:hover:not(.active) { background: #f5f5f5; }
+
+#map { flex: 1; }
+
+#error { color: #c00; padding: 16px; }
+
+.popup { font-size: 13px; line-height: 1.4; }
+.popup-title { font-weight: 600; margin-bottom: 4px; font-size: 14px; }
+.popup-meta { color: #555; margin-bottom: 4px; }
+.popup-host { color: #777; font-size: 12px; margin-bottom: 6px; }
+.popup-rsvp {
+  display: inline-block;
+  padding: 4px 10px;
+  background: #e8543e;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.popup-cap {
+  display: inline-block;
+  padding: 1px 6px;
+  background: #f5e0e0;
+  color: #c00;
+  border-radius: 3px;
+  font-size: 11px;
+  margin-left: 4px;
+}

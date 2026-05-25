@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>NY Tech Week 2026 — Event Map</title>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" rel="stylesheet">
+  <link href="./events_map.css" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>NY Tech Week 2026 — Map</h1>
+    <div id="count">Loading…</div>
+  </header>
+  <div id="date-picker"></div>
+  <div id="map"></div>
+  <div id="error"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
+  <script src="./config.js"></script>
+  <script src="./events_map.js"></script>
+  <script>
+    initEventMap({
+      token: window.TWAG_MAPBOX_TOKEN,
+      centerLat: 40.7549,
+      centerLon: -73.9840,
+      zoom: 11.5,
+      geojsonUrl: "./nyc.geojson",
+      dateRange: [
+        "2026-06-01", "2026-06-02", "2026-06-03",
+        "2026-06-04", "2026-06-05", "2026-06-06", "2026-06-07",
+      ],
+      defaultDate: "2026-06-02",
+    });
+  </script>
+</body>
+</html>

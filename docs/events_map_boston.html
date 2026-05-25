@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Boston Tech Week 2026 — Event Map</title>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" rel="stylesheet">
+  <link href="./events_map.css" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>Boston Tech Week 2026 — Map</h1>
+    <div id="count">Loading…</div>
+  </header>
+  <div id="date-picker"></div>
+  <div id="map"></div>
+  <div id="error"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
+  <script src="./config.js"></script>
+  <script src="./events_map.js"></script>
+  <script>
+    initEventMap({
+      token: window.TWAG_MAPBOX_TOKEN,
+      centerLat: 42.3601,
+      centerLon: -71.0942,
+      zoom: 12.0,
+      geojsonUrl: "./boston.geojson",
+      dateRange: [
+        "2026-05-26", "2026-05-27", "2026-05-28",
+        "2026-05-29", "2026-05-30", "2026-05-31",
+      ],
+      defaultDate: "2026-05-26",
+    });
+  </script>
+</body>
+</html>
