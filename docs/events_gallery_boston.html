@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Boston Tech Week 2026 — Event Gallery</title>
+  <link href="./events_map.css" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>Boston Tech Week 2026 — Gallery</h1>
+    <div id="count">Loading…</div>
+    <div class="credit">Made by Nate Aune (<a href="https://twitter.com/natea" target="_blank" rel="noopener">@natea</a>)</div>
+  </header>
+  <nav class="tab-nav">
+    <a href="./events_map_boston.html">Map</a>
+    <a href="./events_gallery_boston.html" class="active">Gallery</a>
+  </nav>
+  <div id="date-picker"></div>
+  <div id="gallery-grid"></div>
+  <div id="error"></div>
+
+  <script src="./events_gallery.js"></script>
+  <script>
+    initEventGallery({
+      galleryUrl: "./boston_gallery.json",
+      dateRange: [
+        "2026-05-26", "2026-05-27", "2026-05-28",
+        "2026-05-29", "2026-05-30", "2026-05-31",
+      ],
+      defaultDate: "2026-05-26",
+    });
+  </script>
+</body>
+</html>

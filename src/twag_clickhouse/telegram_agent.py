@@ -79,7 +79,8 @@ def _help_reply() -> str:
         "`/map [YYYY-MM-DD]` - open the event map for a given day\n"
         "`/verbose` - show the agent thinking stream\n"
         "`/quiet` - show only result updates and final answers\n\n"
-        "Use concrete criteria like topic, date, neighborhood, host, capacity, RSVP status, or time."
+        "Use concrete criteria like topic, date, neighborhood, host, capacity, RSVP status, or time.\n\n"
+        "Made by Nate Aune ([@natea](https://twitter.com/natea))."
     )
 
 

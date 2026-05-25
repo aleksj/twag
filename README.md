@@ -2,6 +2,26 @@
 
 Use the NY Tech Week bot through Telegram: [https://t.me/Twagbot](https://t.me/Twagbot)
 
+## Boston port by Nate Aune ([@natea](https://twitter.com/natea))
+
+I forked the upstream NY Tech Week bot and repurposed it for Boston Tech Week
+2026 by parameterizing the entire stack around a `TWAG_CITY` env var (NYC and
+Boston live side-by-side; adding a new city is one entry in `city.py`). I also
+re-crawled the Boston events dataset from `tech-week.com/calendar/boston` and
+added two new views served from GitHub Pages:
+
+- **Event map** — clustered map of events per day, powered by Mapbox GL JS
+  with venues geocoded via OpenCage:
+  [Boston](https://natea.github.io/twag/events_map_boston.html) ·
+  [NYC](https://natea.github.io/twag/events_map_nyc.html)
+- **Image gallery** — scrollable grid of event hero images; tap a tile to RSVP
+  on Partiful:
+  [Boston](https://natea.github.io/twag/events_gallery_boston.html) ·
+  [NYC](https://natea.github.io/twag/events_gallery_nyc.html)
+
+The Telegram bot now includes a `/map [date]` command and appends a "🗺 View on
+map" link to every event-list answer.
+
 ## Cities
 
 TWAG is parameterized by the `TWAG_CITY` environment variable. Two cities are registered:
@@ -20,6 +40,108 @@ will only see `nytw_*` rows, and vice versa.
 To add a new city, register a `CityConfig` in `src/twag_clickhouse/city.py` and
 copy `data/nytw-2026-for-agents/scripts/` into a new dataset directory with the
 city's `calendar_url` swapped in `crawl_manifest.py`.
+
+## Building the event map and gallery
+
+The static map and gallery pages under `docs/` are generated from the dataset
+under `data/<city>-for-agents/`. Boston ships pre-built; for a new city or to
+refresh, run the pipeline below. All commands honor `TWAG_CITY` (or pass
+`--city <slug>`).
+
+### One-time setup
+
+Copy `.env.example` to `.env` and fill in:
+
+- `OPENCAGE_API_KEY` — get a free key at <https://opencagedata.com/>. Free
+  tier: 2,500 requests/day, 1 req/sec, permanent storage allowed.
+- `MAPBOX_PUBLIC_TOKEN` — get a public token at
+  <https://account.mapbox.com/access-tokens/>. **Restrict it by referrer**
+  (e.g. `https://natea.github.io/twag/*` and `http://localhost:8085/*`) in the
+  Mapbox dashboard since this token ships to the browser in `docs/config.js`.
+- `TWAG_PUBLIC_MAP_BASE_URL` — the public URL of the deployed map (used by the
+  Telegram bot to link back to it).
+
+Then copy `docs/config.example.js` to `docs/config.js` and paste the same
+Mapbox public token in there. `docs/config.js` is committed (the token is
+referrer-restricted, not secret).
+
+### Geocode venues → `venues.json`
+
+```bash
+TWAG_CITY=boston twag geocode-venues
+```
+
+Reads `data/<city>-for-agents/events/*.md`, calls OpenCage at 1 req/sec, and
+caches results to `data/<city>-for-agents/venues.json`. Idempotent — only
+geocodes addresses missing from the cache. Pass `--refresh` to re-geocode
+everything; `--limit N` to test on a small batch first.
+
+For Boston that's ~10 minutes for 456 venues; for NYC ~16 minutes for 981.
+
+### Build the map GeoJSON → `docs/<city>.geojson`
+
+```bash
+TWAG_CITY=boston twag build-geojson
+```
+
+Joins events + venues, filters canceled/no-coords/stub events, writes
+`docs/<city>.geojson` for `events_map_<city>.html` to fetch client-side.
+
+### Fetch event images → `data/<city>-for-agents/images/`
+
+The dataset's `scripts/enrich.py` downloads each event's hero image from
+Partiful's Firebase CDN into `images/<event_id>.png`. This is part of the
+crawl pipeline (see `data/<city>-for-agents/scripts/`):
+
+```bash
+cd data/bostontw-2026-for-agents
+mkdir -p images
+python3 scripts/enrich.py --events events/ --images-dir images/
+```
+
+Idempotent — skips already-downloaded images. Boston produces ~770 MB of
+full-resolution PNG/JPG across 589 events; the `images/` directory is **not**
+committed (matches the NYC convention). Re-run only when refreshing the
+dataset.
+
+### Generate gallery thumbnails → `docs/<city>/thumbs/`
+
+```bash
+TWAG_CITY=boston twag build-thumbnails
+```
+
+Resizes every local image to ~400 px JPEG at quality 80 and writes to
+`docs/<city>/thumbs/<event_id>.jpg`. Boston: 582 thumbs, ~15 MB total (vs.
+770 MB at full res). These **are** committed so GitHub Pages can serve them.
+Idempotent unless `--refresh`.
+
+### Build the gallery JSON → `docs/<city>_gallery.json`
+
+```bash
+TWAG_CITY=boston twag build-gallery
+```
+
+Emits the gallery payload (title, time, host, neighborhood, RSVP URL,
+description excerpt, capacity). The path under each entry's `image` field
+points at the local thumbnail when one exists, else the Firebase URL from the
+event frontmatter — so this command must run *after* `build-thumbnails` to
+pick up the local paths.
+
+### Preview locally
+
+```bash
+cd docs && python3 -m http.server 8085
+```
+
+Open `http://localhost:8085/events_map_boston.html` or
+`http://localhost:8085/events_gallery_boston.html`.
+
+### Deploy
+
+Push to `main`, then in repo settings enable **Pages → Deploy from a branch
+→ main → /docs**. Sites publish at
+`https://<user>.github.io/<repo>/events_map_<city>.html` and
+`...events_gallery_<city>.html`.
 
 
 ![QR code for https://t.me/Twagbot](docs/assets/twagbot-qr.png)
