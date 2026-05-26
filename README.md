@@ -10,7 +10,7 @@ TWAG is a Telegram-first, ClickHouse-backed event agent for NY Tech Week and Bos
 
 ## Try It
 
-| City | Telegram bot | Browser terminal | Telegram QR | Nate's navs |
+| City | Telegram bot | Browser terminal | Telegram QR | Gallery & Map View |
 | --- | --- | --- | --- | --- |
 | NY Tech Week | [@Twagbot](https://t.me/Twagbot) | [Open terminal](http://46.224.170.22:8765/terminal?city=nyc) | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> | [Map](https://natea.github.io/twag/events_map_nyc.html) · [Gallery](https://natea.github.io/twag/events_gallery_nyc.html) |
 | Boston Tech Week | [@TwagBostonBot](https://t.me/TwagBostonBot) | [Open terminal](http://46.224.170.22:8765/terminal?city=boston) | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> | [Map](https://natea.github.io/twag/events_map_boston.html) · [Gallery](https://natea.github.io/twag/events_gallery_boston.html) |
