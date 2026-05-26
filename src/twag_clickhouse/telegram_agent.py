@@ -95,6 +95,34 @@ _MONTH_NUM = {
 }
 
 
+def _resolve_bot_token() -> str:
+    """Pick the Telegram bot token for the active city.
+
+    Resolution order:
+    1. <CITY_SLUG_UPPER>_TELEGRAM_BOT_TOKEN (e.g. NYC_TELEGRAM_BOT_TOKEN).
+       Lets one .env hold tokens for several cities side-by-side.
+    2. TELEGRAM_BOT_TOKEN — legacy single-token fallback, kept so existing
+       deployments don't need an env change.
+
+    Raises ValueError if neither is set, naming both candidates so the
+    operator knows what to define.
+    """
+    city = active_city()
+    city_var = f"{city.slug.upper()}_TELEGRAM_BOT_TOKEN"
+    city_token = os.getenv(city_var, "").strip()
+    if city_token:
+        return city_token
+
+    legacy_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if legacy_token:
+        return legacy_token
+
+    raise ValueError(
+        f"No Telegram bot token found. Set {city_var} (preferred) "
+        "or TELEGRAM_BOT_TOKEN (legacy fallback) in the environment."
+    )
+
+
 def _public_map_base_url() -> str:
     base = os.getenv("TWAG_PUBLIC_MAP_BASE_URL", "").strip()
     if not base:
@@ -294,9 +322,7 @@ class TelegramAgentConfig:
 
     @classmethod
     def from_env(cls) -> "TelegramAgentConfig":
-        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        if not bot_token:
-            raise ValueError("TELEGRAM_BOT_TOKEN is required")
+        bot_token = _resolve_bot_token()
 
         allowed = {
             int(value.strip())
