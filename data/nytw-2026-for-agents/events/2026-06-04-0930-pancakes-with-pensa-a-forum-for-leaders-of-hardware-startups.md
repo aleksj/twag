@@ -23,11 +23,11 @@ badges: []
 fetch_status: ok
 owner_count: 2
 owner_ids: ["zZPwsK2KSxb9zAopJntU8VlIZAS2", "7DFu4rITofNzKIjA7hCx"]
-is_capped: true
+is_capped: false
 max_capacity: 12
 remaining_capacity: 0
-total_guest_count: 41
-approved_guest_count: 0
+total_guest_count: 46
+approved_guest_count: 39
 local_image: "images/BDQPwKS8HqWD6G5p5lQI.png"
 canceled: false
 ---

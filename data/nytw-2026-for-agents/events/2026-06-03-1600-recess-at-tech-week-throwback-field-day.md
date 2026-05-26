@@ -21,8 +21,8 @@ fetch_status: ok
 owner_count: 3
 owner_ids: ["lxLVpw15y0Y6pOW2hV40", "7DFu4rITofNzKIjA7hCx", "AA9EgONl91Qnh959u2NwYhFpK323"]
 is_capped: false
-total_guest_count: 60
-approved_guest_count: 54
+total_guest_count: 68
+approved_guest_count: 65
 local_image: "images/0GFyTBq0UAi8E6N64Rlz.png"
 canceled: false
 ---

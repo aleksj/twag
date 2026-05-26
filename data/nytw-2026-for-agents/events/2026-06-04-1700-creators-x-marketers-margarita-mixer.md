@@ -21,8 +21,8 @@ fetch_status: ok
 owner_count: 4
 owner_ids: ["SXWkVJMZ5ZYH5dFIoAUX6FBjR8B2", "J8A8HsDs1HeDy6ed6lBqlXJe1nv2", "7DFu4rITofNzKIjA7hCx", "OD7zz6lrbCOwwqE8FPCDXCgdw2O2"]
 is_capped: false
-total_guest_count: 70
-approved_guest_count: 33
+total_guest_count: 134
+approved_guest_count: 36
 image_download_error: "HTTP Error 403: Forbidden"
 canceled: false
 ---

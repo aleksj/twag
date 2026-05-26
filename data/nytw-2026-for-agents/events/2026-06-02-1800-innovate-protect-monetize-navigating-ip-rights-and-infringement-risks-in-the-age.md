@@ -24,7 +24,7 @@ owner_ids: ["9zg7B5MwQ0PidLEGdTmYqo2qeKz2", "7DFu4rITofNzKIjA7hCx", "GObNOE4sJNc
 is_capped: true
 max_capacity: 40
 remaining_capacity: 0
-total_guest_count: 61
+total_guest_count: 71
 approved_guest_count: 0
 local_image: "images/DZxBZ2Nm6CjxkgEaBImd.png"
 canceled: false

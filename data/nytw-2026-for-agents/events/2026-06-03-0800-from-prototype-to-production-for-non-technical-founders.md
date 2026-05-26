@@ -17,11 +17,11 @@ visibility: "public"
 at_capacity: false
 badges: []
 fetch_status: ok
-owner_count: 2
-owner_ids: ["K5BvXyKdG9ajSoXIYLo9FucCyHy2", "7DFu4rITofNzKIjA7hCx"]
+owner_count: 3
+owner_ids: ["K5BvXyKdG9ajSoXIYLo9FucCyHy2", "7DFu4rITofNzKIjA7hCx", "TzICBgxWkVcDP7u6bWrv7pErgQo1"]
 is_capped: false
 canceled: false
-total_guest_count: 0
+total_guest_count: 9
 approved_guest_count: 0
 local_image: "images/AbbL1aqeScPPUW22Ijrf.png"
 ---

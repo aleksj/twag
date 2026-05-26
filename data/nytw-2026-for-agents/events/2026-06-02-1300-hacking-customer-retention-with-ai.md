@@ -25,9 +25,9 @@ owner_count: 6
 owner_ids: ["Hc3Aico8FXVFkZlk8mzxg38NIiR2", "LcZD2hHcN8bugyJLSW7lnXD2N4k1", "UH7VYlZKNqMB5wcwLWIM403EjAs2", "7DFu4rITofNzKIjA7hCx", "5u9VdtZ0lSM3aStyBjh5uNfhvh03", "GpohFMxkIpeTGfxNI5FwciPMEZQ2"]
 is_capped: true
 max_capacity: 250
-remaining_capacity: 110
-total_guest_count: 158
-approved_guest_count: 140
+remaining_capacity: 84
+total_guest_count: 188
+approved_guest_count: 166
 local_image: "images/tVledXQK9bwSVjCF0OUT.png"
 canceled: false
 ---

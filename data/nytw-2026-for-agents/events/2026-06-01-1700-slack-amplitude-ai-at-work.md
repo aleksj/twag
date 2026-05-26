@@ -24,10 +24,10 @@ fetch_status: ok
 owner_count: 4
 owner_ids: ["nKGqFAioS5P18UkBOfRPD6om7Id2", "ZR3QwsUjE1wLr4WD9989", "7DFu4rITofNzKIjA7hCx", "dLhfpWRY6rdWvJjTgcasqG88LSD3"]
 is_capped: true
-max_capacity: 150
-remaining_capacity: 21
-total_guest_count: 448
-approved_guest_count: 129
+max_capacity: 175
+remaining_capacity: 14
+total_guest_count: 506
+approved_guest_count: 161
 local_image: "images/dmFBKIxzn2LdFmktqas8.png"
 canceled: false
 ---

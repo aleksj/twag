@@ -26,7 +26,7 @@ owner_ids: ["dDZamIWfPeaomWI5OwK6ApngmL23", "zOaKIJaaTIWwCjMwoVuaFXWdblI2", "7DF
 is_capped: true
 max_capacity: 250
 remaining_capacity: 243
-total_guest_count: 20
+total_guest_count: 31
 approved_guest_count: 7
 local_image: "images/rYEwnDFPz3NvShbq76M1.jpg"
 canceled: false

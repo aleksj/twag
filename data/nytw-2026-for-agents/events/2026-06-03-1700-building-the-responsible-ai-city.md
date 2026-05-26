@@ -22,9 +22,9 @@ owner_count: 6
 owner_ids: ["TchpVIUtIuUiYNk3OMsC3Ucp0zA3", "QsN4505Y8hegXKwb8qOpIwSkU4X2", "8KapVyPBTHaMAraIxBJD23ovUYo1", "W6JyP3teDFgHg3737cx1cxNne1W2", "ZW8dUQRvshNxw6G9oPDsbRiJfvo1", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
 canceled: false
-total_guest_count: 410
-approved_guest_count: 14
-local_image: "images/RRKTFLLQ3k5UpzWqjCtH.jpg"
+total_guest_count: 434
+approved_guest_count: 30
+local_image: "images/RRKTFLLQ3k5UpzWqjCtH.png"
 ---
 
 # Building the Responsible AI City

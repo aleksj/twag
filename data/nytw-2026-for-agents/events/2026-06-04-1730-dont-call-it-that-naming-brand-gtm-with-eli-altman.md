@@ -18,13 +18,15 @@ at_capacity: false
 going_guest_count: 86
 badges: []
 fetch_status: ok
-owner_count: 2
-owner_ids: ["o0Ue0opsLlcC5DFSFF67tzgU1Mc2", "7DFu4rITofNzKIjA7hCx"]
-is_capped: false
-total_guest_count: 93
+owner_count: 3
+owner_ids: ["o0Ue0opsLlcC5DFSFF67tzgU1Mc2", "7DFu4rITofNzKIjA7hCx", "hWPu6K8fH3TmOgkaU9jEv6EYCfF3"]
+is_capped: true
+total_guest_count: 115
 approved_guest_count: 0
 local_image: "images/jeb9AxJN56eYiF5etSjH.png"
 canceled: false
+max_capacity: 200
+remaining_capacity: 91
 ---
 
 # Don't Call It That — Naming, Brand & GTM with Eli Altman

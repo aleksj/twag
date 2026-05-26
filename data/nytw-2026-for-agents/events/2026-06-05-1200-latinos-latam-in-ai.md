@@ -19,13 +19,13 @@ at_capacity: false
 going_guest_count: 117
 badges: []
 fetch_status: ok
-owner_count: 5
-owner_ids: ["k9o75egDXRZGkjxMT2fDaTGNjv52", "7DFu4rITofNzKIjA7hCx", "Ax633NYDw2ZhzDAqrm7K3ZHZYTd2", "BkXrXIP37EQwrXpC3calRbDZoMO2", "UT45etjIdIMKwMrjgDaDCHmOzoV2"]
+owner_count: 6
+owner_ids: ["k9o75egDXRZGkjxMT2fDaTGNjv52", "7DFu4rITofNzKIjA7hCx", "Ax633NYDw2ZhzDAqrm7K3ZHZYTd2", "BkXrXIP37EQwrXpC3calRbDZoMO2", "UT45etjIdIMKwMrjgDaDCHmOzoV2", "E3pfYlpti9UyLUezScON07VedGm1"]
 is_capped: true
 max_capacity: 150
-remaining_capacity: 83
-total_guest_count: 122
-approved_guest_count: 67
+remaining_capacity: 70
+total_guest_count: 146
+approved_guest_count: 80
 local_image: "images/H6ckvNb4WAjNTkDJTqsp.jpg"
 canceled: false
 ---

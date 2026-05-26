@@ -22,11 +22,13 @@ badges: []
 fetch_status: ok
 owner_count: 3
 owner_ids: ["CLUBDCDx6vRk9kTY3CmeHPX4J5W2", "7DFu4rITofNzKIjA7hCx", "UFLWR7fz5AmfgETqvyYh"]
-is_capped: false
-total_guest_count: 17
-approved_guest_count: 12
+is_capped: true
+total_guest_count: 30
+approved_guest_count: 18
 local_image: "images/499cWPHnN3Uoh8j7C9AN.png"
 canceled: false
+max_capacity: 20
+remaining_capacity: 2
 ---
 
 # AI-Native Planning: How Companies Are Transforming Supply Chain & Finance Decision-Making

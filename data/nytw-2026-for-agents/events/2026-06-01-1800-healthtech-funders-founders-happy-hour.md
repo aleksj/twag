@@ -23,8 +23,8 @@ fetch_status: ok
 owner_count: 3
 owner_ids: ["U75prYDlvfdRNKoWrgGG6MB4fX82", "7DFu4rITofNzKIjA7hCx", "bxLtSf4XkTbIuHB0XqUHSuMwqHI2"]
 is_capped: false
-total_guest_count: 440
-approved_guest_count: 232
+total_guest_count: 491
+approved_guest_count: 245
 local_image: "images/Qjruk2dwZb16a4TFqSaN.png"
 canceled: false
 ---

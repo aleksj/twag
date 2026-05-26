@@ -24,10 +24,10 @@ fetch_status: ok
 owner_count: 3
 owner_ids: ["vIr90wjfnQfMmzXbLgmDFC2aB2j2", "7DFu4rITofNzKIjA7hCx", "cDTBUosGpmY9VJTHocSNwxv95bq1"]
 is_capped: true
-max_capacity: 80
-remaining_capacity: 11
-total_guest_count: 94
-approved_guest_count: 69
+max_capacity: 100
+remaining_capacity: 10
+total_guest_count: 113
+approved_guest_count: 90
 local_image: "images/OABGjYptXq9pQerSnaAq.png"
 canceled: false
 ---

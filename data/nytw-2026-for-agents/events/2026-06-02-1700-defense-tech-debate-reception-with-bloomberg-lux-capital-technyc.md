@@ -24,7 +24,7 @@ fetch_status: ok
 owner_count: 5
 owner_ids: ["GO6i7o3ykiZxKaA6oy5a9SMAk5C2", "zHV9ryBlabSCbsafDBDlPAkQ5nk2", "48S5TDPdNBTUt0kp4MJS", "AHc2J6y7EbYTNeS4Uo2Bs8g42hi2", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
-total_guest_count: 55
+total_guest_count: 124
 approved_guest_count: 4
 local_image: "images/n9CCyMio7NyeQT2wkeE3.png"
 canceled: false

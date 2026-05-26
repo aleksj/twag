@@ -21,10 +21,11 @@ fetch_status: ok
 owner_count: 2
 owner_ids: ["iVbmnOczqvVP1TwMPpuIeTfArsM2", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
-total_guest_count: 93
-approved_guest_count: 19
+total_guest_count: 112
+approved_guest_count: 39
 image_download_error: "HTTP Error 403: Forbidden"
 canceled: false
+local_image: "images/dMstVg7vViat0KgKWCsk.png"
 ---
 
 # AI in Enterprise

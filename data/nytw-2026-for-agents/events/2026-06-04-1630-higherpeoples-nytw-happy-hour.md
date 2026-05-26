@@ -21,8 +21,8 @@ owner_count: 2
 owner_ids: ["dfyFB6cJj6fTe0JY2STfk8CJmUU2", "7DFu4rITofNzKIjA7hCx"]
 is_capped: true
 max_capacity: 50
-remaining_capacity: 33
-total_guest_count: 17
+remaining_capacity: 19
+total_guest_count: 31
 approved_guest_count: 0
 local_image: "images/AMDCAbR2zrSQ3gTtQBgs.png"
 canceled: false

@@ -21,12 +21,12 @@ at_capacity: false
 going_guest_count: 83
 badges: []
 fetch_status: ok
-owner_count: 2
-owner_ids: ["lg92HprfhJfaUg1fmoAuP5iDQ9D2", "7DFu4rITofNzKIjA7hCx"]
+owner_count: 4
+owner_ids: ["lg92HprfhJfaUg1fmoAuP5iDQ9D2", "7DFu4rITofNzKIjA7hCx", "hqkiVGc3ofZFv9QXzy5IRsyZ0b83", "BDYAXdtl7xYML3Jsplz2X2yRPXg1"]
 is_capped: true
-max_capacity: 100
-remaining_capacity: 16
-total_guest_count: 86
+max_capacity: 150
+remaining_capacity: 45
+total_guest_count: 107
 approved_guest_count: 0
 local_image: "images/ytrORmKjcLHr4rudjY3k.jpg"
 canceled: false

@@ -23,7 +23,7 @@ owner_ids: ["Wpad1XHbsKS3LJFERVQsizZf6QH2", "7DFu4rITofNzKIjA7hCx"]
 is_capped: true
 max_capacity: 180
 remaining_capacity: 4
-total_guest_count: 194
+total_guest_count: 218
 approved_guest_count: 176
 local_image: "images/8eZFNPbkIvMBjsJELaAE.png"
 canceled: false

@@ -19,7 +19,7 @@ fetch_status: ok
 owner_count: 3
 owner_ids: ["zWex7L0Z7fd78qOi2mNsYUW3E7x2", "UFLWR7fz5AmfgETqvyYh", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
-total_guest_count: 14
+total_guest_count: 28
 approved_guest_count: 0
 local_image: "images/WJDHl4NiUwrLHeQxBi7S.jpg"
 canceled: false

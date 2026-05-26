@@ -26,7 +26,7 @@ owner_ids: ["OXeUYN7FgZYFMf8gZFL4rbg3Jf43", "7DFu4rITofNzKIjA7hCx"]
 is_capped: true
 max_capacity: 25
 remaining_capacity: 19
-total_guest_count: 15
+total_guest_count: 24
 approved_guest_count: 6
 local_image: "images/nDbviUZWOe0l4xxDr82M.jpg"
 canceled: false

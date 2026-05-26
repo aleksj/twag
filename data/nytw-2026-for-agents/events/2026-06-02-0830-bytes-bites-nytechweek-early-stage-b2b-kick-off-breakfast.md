@@ -21,10 +21,13 @@ fetch_status: ok
 owner_count: 5
 owner_ids: ["0aBMs7EK72OsdTJuDqNdg0twkSk2", "7DFu4rITofNzKIjA7hCx", "qPe4nG5jS9Y7OuvsjCWBmgyuJQt1", "So3VKWqPkhZ9BAsHI8pV", "SLbFSVWMyYMAZNR57x5rCJ6zN7E3"]
 is_capped: false
-total_guest_count: 196
+total_guest_count: 195
 approved_guest_count: 0
 local_image: "images/AmtcmAOuDjLnq4OXzR3G.png"
-canceled: false
+canceled: true
+canceled_at: "2026-05-22T15:42:19.387Z"
+canceled_by: "0aBMs7EK72OsdTJuDqNdg0twkSk2"
+cancellation_message: "Bytes&Bites is so sad to be missing this year's #NYTeechWeek! We will be back with a bang in 2027 🎉. See you out there! "
 ---
 
 # 🍩 Bytes & Bites - #NYTechWeek -early stage b2b kick off breakfast

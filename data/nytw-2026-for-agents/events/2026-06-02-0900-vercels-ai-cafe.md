@@ -24,7 +24,7 @@ owner_ids: ["tKRTb9VdvuTW7FJtlr6PCZ5XhBL2", "7szJijSfVkM9KR2Bv0Xdi9uwU953", "D3H
 is_capped: true
 max_capacity: 150
 remaining_capacity: 0
-total_guest_count: 238
+total_guest_count: 517
 approved_guest_count: 0
 local_image: "images/Qmtu47YtTIxUJ7JGzPSP.jpg"
 canceled: false
