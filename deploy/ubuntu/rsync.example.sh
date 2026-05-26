@@ -53,9 +53,46 @@ fi
 if [[ "$RUN_REMOTE_INSTALL" == "true" ]]; then
   ssh -p "$SSH_PORT" "$REMOTE_USER@$REMOTE_HOST" \
     "cd '$REMOTE_DIR' && SERVICE_USER='$REMOTE_USER' deploy/ubuntu/install-after-rsync.sh"
+  cat <<EOF
+
+Remote install completed on $REMOTE_USER@$REMOTE_HOST.
+
+Already done:
+  - synced repository to $REMOTE_DIR
+  - synced env file to $REMOTE_ENV_FILE when SYNC_ENV_FILE=true and the local env existed
+  - installed/updated the remote venv and Python package
+  - installed systemd unit templates and reloaded systemd
+
+Still required:
+  - verify $REMOTE_ENV_FILE has the expected secrets
+  - enable/start new services, or restart already-enabled services
+
+Run on the Ubuntu host:
+  ssh -p $SSH_PORT $REMOTE_USER@$REMOTE_HOST
+  sudo systemctl enable --now twag-telegram-agent@$REMOTE_USER.service
+  sudo systemctl enable --now twag-telegram-agent-boston@$REMOTE_USER.service
+  sudo systemctl enable --now twag-nimble@$REMOTE_USER.service
+
+For an existing deployment, restart instead:
+  sudo systemctl restart twag-telegram-agent@$REMOTE_USER.service twag-telegram-agent-boston@$REMOTE_USER.service twag-nimble@$REMOTE_USER.service
+
+Then check:
+  systemctl status twag-telegram-agent@$REMOTE_USER.service twag-telegram-agent-boston@$REMOTE_USER.service twag-nimble@$REMOTE_USER.service --no-pager
+EOF
 else
   cat <<EOF
-Next on the Ubuntu host:
+Repository sync completed on $REMOTE_USER@$REMOTE_HOST.
+
+Already done:
+  - synced repository to $REMOTE_DIR
+  - synced env file to $REMOTE_ENV_FILE when SYNC_ENV_FILE=true and the local env existed
+
+Still required:
+  - install/update the remote venv and systemd units
+  - verify $REMOTE_ENV_FILE has the expected secrets
+  - enable/start new services, or restart already-enabled services
+
+Run on the Ubuntu host:
   ssh -p $SSH_PORT $REMOTE_USER@$REMOTE_HOST
   cd $REMOTE_DIR
   SERVICE_USER=$REMOTE_USER deploy/ubuntu/install-after-rsync.sh

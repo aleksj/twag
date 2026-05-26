@@ -65,18 +65,36 @@ sudo systemctl daemon-reload
 
 cat <<EOF
 
-Installed systemd units:
+Completed:
+  - installed Python runtime dependencies
+  - created/updated $APP_DIR/.venv
+  - installed TWAG into the venv
+  - ensured $ENV_DIR and /var/log/twag exist
+  - installed systemd unit files into $SYSTEMD_DIR
+  - ran systemctl daemon-reload
+
+Not done by this installer:
+  - services were not enabled, started, or restarted
+  - existing $ENV_FILE values were not modified
+
+Installed unit templates:
   twag-telegram-agent@.service (NYC)
   twag-telegram-agent-boston@.service
   twag-nimble@.service
 
-Edit secrets:
+Check or edit secrets before starting:
   sudoedit $ENV_FILE
 
-Start all services:
+Enable and start all services:
   sudo systemctl enable --now twag-telegram-agent@$SERVICE_USER.service
   sudo systemctl enable --now twag-telegram-agent-boston@$SERVICE_USER.service
   sudo systemctl enable --now twag-nimble@$SERVICE_USER.service
+
+Or restart already-enabled services after a deploy:
+  sudo systemctl restart twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-nimble@$SERVICE_USER.service
+
+Check status:
+  systemctl status twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-nimble@$SERVICE_USER.service --no-pager
 
 Logs:
   journalctl -u twag-telegram-agent@$SERVICE_USER.service -f
