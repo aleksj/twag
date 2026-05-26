@@ -22,7 +22,7 @@ owner_count: 4
 owner_ids: ["pujFpqAjGdVYNtBAFJrYupkFuYg1", "7DFu4rITofNzKIjA7hCx", "gjlHyjRU3FtOIaxNsFvR", "oXvym8wmevfIxIkWDUYekXvjN5D2"]
 is_capped: false
 total_guest_count: 242
-approved_guest_count: 22
+approved_guest_count: 26
 local_image: "images/TDVls3ivYND4qPkb5ltW.png"
 canceled: false
 ---

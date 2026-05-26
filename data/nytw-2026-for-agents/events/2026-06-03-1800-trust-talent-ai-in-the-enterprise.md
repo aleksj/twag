@@ -25,7 +25,7 @@ owner_count: 4
 owner_ids: ["21pbqC443tbCuR6gckjmTMxhENF3", "YEooLYZxPtR4aNQ86I1kX6JDzIq1", "7DFu4rITofNzKIjA7hCx", "0cC8swJamuXEhefDbbn7RnOAd0C3"]
 is_capped: false
 canceled: false
-total_guest_count: 60
+total_guest_count: 73
 approved_guest_count: 0
 local_image: "images/r9eck0K6ZWexRHMzjGNV.png"
 ---

@@ -14,30 +14,48 @@ of starting the process under the right environment — not code changes.
    `TWAG_CITY=boston twag load-nytw --replace` after running the dataset
    pipeline in `data/bostontw-2026-for-agents/scripts/`.
 
+## Picking the bot token
+
+The bot resolves its token in this order:
+
+1. City-specific token names. For NYC, both `NY_TELEGRAM_BOT_TOKEN` and
+   `NYC_TELEGRAM_BOT_TOKEN` are supported. For Boston, use
+   `BOSTON_TELEGRAM_BOT_TOKEN`. **Use this for any multi-city setup**: define
+   both tokens in one env file and each bot process picks the right one.
+2. `TELEGRAM_BOT_TOKEN` — legacy single-token fallback. Kept so existing
+   single-city deployments don't need to change anything.
+
+If neither is set the bot fails fast with both candidate names in the error.
+
 ## Local run
 
 ```bash
 TWAG_CITY=boston \
-TELEGRAM_BOT_TOKEN=<boston-bot-token> \
+BOSTON_TELEGRAM_BOT_TOKEN=<boston-bot-token> \
 twag telegram-agent
 ```
 
 That's it. The bot greets as **Boston Tech Week**, uses the Boston vibe line on
 subjective questions, and queries the `bostw_*` tables.
 
-To run NY and Boston bots side-by-side on the same machine, point them at
-different lock files so they don't collide:
+To run NY and Boston bots side-by-side on the same machine, put both tokens
+in your `.env` and just vary `TWAG_CITY` + the lock file per process:
+
+```bash
+# .env (one file holds both)
+NY_TELEGRAM_BOT_TOKEN=<nyc-token>
+# NYC_TELEGRAM_BOT_TOKEN=<nyc-token> also works
+BOSTON_TELEGRAM_BOT_TOKEN=<boston-token>
+```
 
 ```bash
 # NYC
 TWAG_CITY=nyc \
-TELEGRAM_BOT_TOKEN=<nyc-token> \
 TELEGRAM_AGENT_LOCK_FILE=.telegram-agent-nyc.lock \
 twag telegram-agent
 
 # Boston (in another shell)
 TWAG_CITY=boston \
-TELEGRAM_BOT_TOKEN=<boston-token> \
 TELEGRAM_AGENT_LOCK_FILE=.telegram-agent-boston.lock \
 twag telegram-agent
 ```
@@ -51,33 +69,44 @@ from starting in the same directory. Each city needs its own.
 The shipped unit files (`deploy/ubuntu/twag-telegram-agent@.service`) all share
 a single `EnvironmentFile=/etc/twag/twag.env`. Two ways to add Boston:
 
-### Option A — separate env file and unit per city (recommended)
+### Option A — one shared env file, separate unit per city (recommended)
 
-Lets NYC and Boston run in parallel as independent services.
+Lets NYC and Boston run in parallel as independent services from the same
+env file. Per-city Telegram bot tokens make this safe.
 
-1. Copy the existing env file and edit the Boston-specific values:
-
-   ```bash
-   sudo cp /etc/twag/twag.env /etc/twag/twag-boston.env
-   sudo $EDITOR /etc/twag/twag-boston.env
-   ```
-
-   Set inside `twag-boston.env`:
+1. Add the Boston bot token to the shared env file:
 
    ```bash
-   TWAG_CITY=boston
-   TELEGRAM_BOT_TOKEN=<boston-bot-token>
-   TELEGRAM_AGENT_LOCK_FILE=.telegram-agent-boston.lock
+   sudo $EDITOR /etc/twag/twag.env
    ```
 
-2. Create a Boston copy of the unit file pointing at the new env:
+   ```bash
+   # /etc/twag/twag.env — keep existing NYC values, add:
+   NY_TELEGRAM_BOT_TOKEN=<nyc-bot-token>       # NYC_TELEGRAM_BOT_TOKEN also works
+   BOSTON_TELEGRAM_BOT_TOKEN=<boston-bot-token>
+   ```
+
+   You can keep `TELEGRAM_BOT_TOKEN=...` for back-compat — the NYC process
+   will fall back to it if `NY_TELEGRAM_BOT_TOKEN` and
+   `NYC_TELEGRAM_BOT_TOKEN` are unset. No NYC change
+   required to enable the Boston bot.
+
+2. Create a Boston copy of the unit file with `TWAG_CITY=boston` baked in:
 
    ```bash
    sudo cp /etc/systemd/system/twag-telegram-agent@.service \
            /etc/systemd/system/twag-telegram-agent-boston@.service
-   sudo sed -i 's|/etc/twag/twag.env|/etc/twag/twag-boston.env|' \
-        /etc/systemd/system/twag-telegram-agent-boston@.service
+   sudo $EDITOR /etc/systemd/system/twag-telegram-agent-boston@.service
    ```
+
+   Add to the `[Service]` block:
+
+   ```ini
+   Environment=TWAG_CITY=boston
+   Environment=TELEGRAM_AGENT_LOCK_FILE=/run/twag/telegram-agent-boston.lock
+   ```
+
+   (The NYC unit can stay as-is — its `TWAG_CITY` is already `nyc` by default.)
 
 3. Enable and start it:
 
@@ -105,7 +134,8 @@ Set:
 
 ```bash
 TWAG_CITY=boston
-TELEGRAM_BOT_TOKEN=<boston-bot-token>
+BOSTON_TELEGRAM_BOT_TOKEN=<boston-bot-token>
+# (or leave TELEGRAM_BOT_TOKEN=<boston-bot-token> if you prefer the legacy var)
 ```
 
 Then restart:

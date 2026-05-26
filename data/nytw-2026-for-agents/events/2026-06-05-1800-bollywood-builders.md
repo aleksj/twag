@@ -24,10 +24,13 @@ fetch_status: ok
 owner_count: 5
 owner_ids: ["gOzNR84ixldc4rlftF75", "7DFu4rITofNzKIjA7hCx", "eMsqyxLRVMcQ8c69KN5icU31S5E3", "xnLT64wGg8arP3LvEL1zPWUA0HU2", "kXvE6l6rBSS22OHryH8JoeahzPN2"]
 is_capped: false
-total_guest_count: 166
+total_guest_count: 191
 approved_guest_count: 5
 local_image: "images/gmQJ86KtlMO3vaJxSQz0.png"
-canceled: false
+canceled: true
+canceled_at: "2026-05-25T18:13:03.601Z"
+canceled_by: "eMsqyxLRVMcQ8c69KN5icU31S5E3"
+cancellation_message: "Hey everyone, sadly we have to cancel this event. A few things behind the scenes shifted, so we made the difficult decision to cancel.\n\nWe were honestly blown away by the response. Over 140 people showed interest (with zero marketing), and we’re definitely going to bring this back soon.\n\nIf you bought a ticket, your refund has been issued. If there are any issues, pls message me directly ❤️ Hope to see you in the next one :)"
 ---
 
 # Bollywood & Builders

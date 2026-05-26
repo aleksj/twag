@@ -20,12 +20,12 @@ guest_action: "APPLY"
 at_capacity: false
 badges: []
 fetch_status: ok
-owner_count: 3
-owner_ids: ["rhn7sIJMM7N7shE36j5YiCeWOu13", "7DFu4rITofNzKIjA7hCx", "kCF6dO7squOpA1sn4I4AfS8WZF42"]
+owner_count: 5
+owner_ids: ["rhn7sIJMM7N7shE36j5YiCeWOu13", "7DFu4rITofNzKIjA7hCx", "kCF6dO7squOpA1sn4I4AfS8WZF42", "ZVUu2eSupVfWEz7czQ2YpEiPlX12", "aLkFrLSzHjOYSQBdthZY9kaeQnz2"]
 is_capped: false
 canceled: false
-total_guest_count: 1
-approved_guest_count: 1
+total_guest_count: 29
+approved_guest_count: 3
 local_image: "images/tPlMvExfd6gOdgKCW6O7.png"
 ---
 

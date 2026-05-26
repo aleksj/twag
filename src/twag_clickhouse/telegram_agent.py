@@ -99,6 +99,37 @@ _MONTH_NUM = {
 }
 
 
+def _resolve_bot_token() -> str:
+    """Pick the Telegram bot token for the active city.
+
+    Resolution order:
+    1. City-specific token names. For NYC, NY_TELEGRAM_BOT_TOKEN and
+       NYC_TELEGRAM_BOT_TOKEN are both supported. For other cities, use
+       <CITY_SLUG_UPPER>_TELEGRAM_BOT_TOKEN.
+    2. TELEGRAM_BOT_TOKEN — legacy single-token fallback, kept so existing
+       deployments don't need an env change.
+
+    Raises ValueError if none are set, naming all candidates so the
+    operator knows what to define.
+    """
+    city = active_city()
+    token_env_names = (
+        *CITY_TELEGRAM_TOKEN_ENV_ALIASES.get(city.slug, ()),
+        f"{city.slug.upper()}_TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_BOT_TOKEN",
+    )
+    ordered_env_names = tuple(dict.fromkeys(token_env_names))
+    for env_name in ordered_env_names:
+        token = os.getenv(env_name, "").strip()
+        if token:
+            return token
+
+    raise ValueError(
+        "No Telegram bot token found. Set one of: "
+        + ", ".join(ordered_env_names)
+    )
+
+
 def _public_map_base_url() -> str:
     base = os.getenv("TWAG_PUBLIC_MAP_BASE_URL", "").strip()
     if not base:
@@ -298,22 +329,7 @@ class TelegramAgentConfig:
 
     @classmethod
     def from_env(cls) -> "TelegramAgentConfig":
-        city = active_city()
-        token_env_names = (
-            *CITY_TELEGRAM_TOKEN_ENV_ALIASES.get(city.slug, ()),
-            f"{city.slug.upper()}_TELEGRAM_BOT_TOKEN",
-            "TELEGRAM_BOT_TOKEN",
-        )
-        bot_token = ""
-        for env_name in dict.fromkeys(token_env_names):
-            bot_token = os.getenv(env_name, "").strip()
-            if bot_token:
-                break
-        if not bot_token:
-            raise ValueError(
-                "Telegram bot token is required. Set one of: "
-                + ", ".join(dict.fromkeys(token_env_names))
-            )
+        bot_token = _resolve_bot_token()
 
         allowed = {
             int(value.strip())

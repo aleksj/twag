@@ -22,9 +22,9 @@ owner_count: 5
 owner_ids: ["963muC9hvXT5pMSylN4h6IlJBVE2", "7DFu4rITofNzKIjA7hCx", "tDT6OSRIZWQyYtJnNHsxarWLVhv1", "7XIjmGxfFBSFJoTuFSXMkYffUx32", "vfykmNMP34X4nJLQjvpFMKPiMHe2"]
 is_capped: true
 max_capacity: 200
-remaining_capacity: 0
-total_guest_count: 280
-approved_guest_count: 200
+remaining_capacity: 2
+total_guest_count: 304
+approved_guest_count: 198
 image_download_error: "HTTP Error 403: Forbidden"
 canceled: false
 ---

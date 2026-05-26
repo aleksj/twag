@@ -24,7 +24,7 @@ fetch_status: ok
 owner_count: 3
 owner_ids: ["Mug63ol7GhORWStwhlKzbaeqdS53", "7DFu4rITofNzKIjA7hCx", "4p6GCVtPOad4VeMrVwvn"]
 is_capped: false
-total_guest_count: 383
+total_guest_count: 449
 approved_guest_count: 0
 local_image: "images/nsJWESaFmNRxg58VfNjT.png"
 canceled: false

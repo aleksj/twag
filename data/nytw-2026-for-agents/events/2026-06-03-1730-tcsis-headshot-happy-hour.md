@@ -22,7 +22,7 @@ fetch_status: ok
 owner_count: 2
 owner_ids: ["0H45vCv4OGcl01oTCXlpJqMev772", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
-total_guest_count: 102
+total_guest_count: 114
 approved_guest_count: 0
 local_image: "images/EnJV7INx1Avqm2pTnmG9.png"
 canceled: false

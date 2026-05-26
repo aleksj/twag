@@ -21,10 +21,11 @@ fetch_status: ok
 owner_count: 2
 owner_ids: ["uH0wLtkpvkhfLqjI3Rg8PNhUrbR2", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
-total_guest_count: 88
+total_guest_count: 104
 approved_guest_count: 0
 image_download_error: "HTTP Error 403: Forbidden"
 canceled: false
+local_image: "images/RPGqcrnx3TRVKsBlSkgt.png"
 ---
 
 # AI for PR: Prompt to Power

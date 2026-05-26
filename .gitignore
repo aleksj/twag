@@ -15,3 +15,5 @@ deploy/ubuntu/rsync.privileged.sh
 dist/
 build/
 *.egg-info/
+data/nytw-2026-for-agents/images/
+data/bostontw-2026-for-agents/images/

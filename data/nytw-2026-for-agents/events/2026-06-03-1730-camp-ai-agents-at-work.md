@@ -21,11 +21,11 @@ at_capacity: false
 going_guest_count: 395
 badges: ["Sponsored", "Evening"]
 fetch_status: ok
-owner_count: 7
-owner_ids: ["TqvUtaFCqrSA0ISZJyDJLlHF8mp2", "U6t6HwkiQAfeLxu40xK0x7tvpm13", "6Eb42vlLtGTZxY99I64thaNqYU82", "Q4qtVofiEsNcr17eZSm75GPMObB3", "Qh6aQBcEyegnGFVaOfNi", "lh1FHwj2D2NuLQYo3gfSqL7hrwz1", "7DFu4rITofNzKIjA7hCx"]
+owner_count: 8
+owner_ids: ["TqvUtaFCqrSA0ISZJyDJLlHF8mp2", "U6t6HwkiQAfeLxu40xK0x7tvpm13", "6Eb42vlLtGTZxY99I64thaNqYU82", "Q4qtVofiEsNcr17eZSm75GPMObB3", "Qh6aQBcEyegnGFVaOfNi", "lh1FHwj2D2NuLQYo3gfSqL7hrwz1", "7DFu4rITofNzKIjA7hCx", "jL0tDNTxYAg3Jg1rXJa8aljpYzy2"]
 is_capped: false
-total_guest_count: 399
-approved_guest_count: 298
+total_guest_count: 518
+approved_guest_count: 377
 local_image: "images/Fp5STyPH0McEt0awlWFD.png"
 canceled: false
 ---

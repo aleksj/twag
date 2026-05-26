@@ -23,7 +23,7 @@ owner_ids: ["93Ut6zWTw3Uw3J4iLqsskrbgSkp1", "7DFu4rITofNzKIjA7hCx", "Sss7NLV42aP
 is_capped: true
 max_capacity: 60
 remaining_capacity: 59
-total_guest_count: 50
+total_guest_count: 57
 approved_guest_count: 1
 local_image: "images/AKtjgFWAn6y37yoxfFan.png"
 canceled: false

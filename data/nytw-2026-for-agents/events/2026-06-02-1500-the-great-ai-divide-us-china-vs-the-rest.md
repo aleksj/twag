@@ -23,7 +23,7 @@ owner_ids: ["3FSslPIpkTW6Qt2ZisobHyZdgxz2", "K5wB9PDzHEaxLf8PrkKGoZgC8di2", "eGf
 is_capped: true
 max_capacity: 115
 remaining_capacity: -3
-total_guest_count: 152
+total_guest_count: 173
 approved_guest_count: 118
 local_image: "images/2UzoY58jttvpNlysyUbc.png"
 canceled: false

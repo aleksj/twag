@@ -19,11 +19,13 @@ badges: []
 fetch_status: ok
 owner_count: 2
 owner_ids: ["ztinVizeexW8yrhXcqkcChaD7013", "7DFu4rITofNzKIjA7hCx"]
-is_capped: false
-total_guest_count: 147
-approved_guest_count: 0
+is_capped: true
+total_guest_count: 171
+approved_guest_count: 149
 local_image: "images/BGETQMMJexGVcvaJYX6l.png"
 canceled: false
+max_capacity: 200
+remaining_capacity: 51
 ---
 
 # NYCPA 

@@ -20,11 +20,13 @@ badges: []
 fetch_status: ok
 owner_count: 2
 owner_ids: ["NKXa1vyo5aacev7mvLqhLarmQN52", "7DFu4rITofNzKIjA7hCx"]
-is_capped: false
-total_guest_count: 81
-approved_guest_count: 58
+is_capped: true
+total_guest_count: 100
+approved_guest_count: 65
 local_image: "images/G6SCgiK0QTXDg0MtyANy.png"
 canceled: false
+max_capacity: 65
+remaining_capacity: 0
 ---
 
 # Mandarin x Markets: China, Conversation, & Cocktails

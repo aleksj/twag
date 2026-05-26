@@ -21,7 +21,7 @@ fetch_status: ok
 owner_count: 3
 owner_ids: ["dlc1BcuGqheko69ueMKfgIWXTT82", "7XZNWxdaE4eaVNcKS5G9", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
-total_guest_count: 27
+total_guest_count: 42
 approved_guest_count: 0
 local_image: "images/6P62aj9sdBO8Nk6BSYqJ.png"
 canceled: false

@@ -18,15 +18,16 @@ at_capacity: false
 going_guest_count: 53
 badges: []
 fetch_status: ok
-owner_count: 2
-owner_ids: ["VmmtNUAAubaqXdp7WXsPbOf31L42", "7DFu4rITofNzKIjA7hCx"]
+owner_count: 3
+owner_ids: ["VmmtNUAAubaqXdp7WXsPbOf31L42", "7DFu4rITofNzKIjA7hCx", "ZWBFFDohjDfdLOjHb5G6zumKNZP2"]
 is_capped: true
 max_capacity: 200
-remaining_capacity: 147
-total_guest_count: 55
-approved_guest_count: 53
+remaining_capacity: 136
+total_guest_count: 67
+approved_guest_count: 64
 image_download_error: "HTTP Error 403: Forbidden"
 canceled: false
+local_image: "images/64Fzm7ItTZKGiWI419L2.png"
 ---
 
 # The Rise Circle: After Hours

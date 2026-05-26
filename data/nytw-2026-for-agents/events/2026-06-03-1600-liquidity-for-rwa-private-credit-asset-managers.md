@@ -23,10 +23,13 @@ fetch_status: ok
 owner_count: 2
 owner_ids: ["DjjNSnV3cKSAcV6WdF9IDkU6eWN2", "7DFu4rITofNzKIjA7hCx"]
 is_capped: false
-total_guest_count: 71
-approved_guest_count: 64
+total_guest_count: 91
+approved_guest_count: 84
 local_image: "images/05ZXMuLsZr76jJcu6T5N.png"
-canceled: false
+canceled: true
+canceled_at: "2026-05-25T18:40:17.681Z"
+canceled_by: "DjjNSnV3cKSAcV6WdF9IDkU6eWN2"
+cancellation_message: "Hi there, \nWe're writing to let you know that the Liquidity for RWA Private Credit Asset Managers event in Boston has been cancelled due to unforeseen circumstances.\n\nThat said, we're still bringing the same focus to New York next week.\n\nJoin us at the New York edition instead: https://partiful.com/e/05ZXMuLsZr76jJcu6T5N\n\nIf you registered for Boston, please RSVP separately for New York through the link above.\n\nWe look forward to seeing you there.\n\nBest, The Protofire Team"
 ---
 
 # Liquidity for RWA Private Credit Asset Managers

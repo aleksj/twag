@@ -21,10 +21,10 @@ at_capacity: false
 going_guest_count: 27
 badges: []
 fetch_status: ok
-owner_count: 2
-owner_ids: ["UFLWR7fz5AmfgETqvyYh", "7DFu4rITofNzKIjA7hCx"]
+owner_count: 4
+owner_ids: ["UFLWR7fz5AmfgETqvyYh", "7DFu4rITofNzKIjA7hCx", "tD7ks1qunlT7Ub8Bg52OsiYkzB42", "OXuNh80AJFepPRV49Qoh9uC2cQs2"]
 is_capped: false
-total_guest_count: 29
+total_guest_count: 47
 approved_guest_count: 8
 local_image: "images/qRPqQEngVH26DukCxojf.jpg"
 canceled: false

@@ -23,9 +23,9 @@ fetch_status: ok
 owner_count: 1
 owner_ids: ["LyuynlPDblUtg7OWPoZi"]
 is_capped: true
-max_capacity: 50
-remaining_capacity: 7
-total_guest_count: 46
+max_capacity: 60
+remaining_capacity: 1
+total_guest_count: 62
 approved_guest_count: 0
 local_image: "images/k5BGHkPmkIiP0SUK4n0F.png"
 canceled: false
