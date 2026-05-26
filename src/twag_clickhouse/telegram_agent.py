@@ -58,11 +58,6 @@ SPONSOR_LINE = (
     "Want to sponsor TechWeek AI search? Contact info@data.flowers"
 )
 
-CITY_TELEGRAM_TOKEN_ENV_ALIASES = {
-    "nyc": ("NY_TELEGRAM_BOT_TOKEN", "NYC_TELEGRAM_BOT_TOKEN"),
-}
-
-
 def _subjective_question_reply() -> str:
     return active_city().vibe_line
 
@@ -102,32 +97,16 @@ _MONTH_NUM = {
 def _resolve_bot_token() -> str:
     """Pick the Telegram bot token for the active city.
 
-    Resolution order:
-    1. City-specific token names. For NYC, NY_TELEGRAM_BOT_TOKEN and
-       NYC_TELEGRAM_BOT_TOKEN are both supported. For other cities, use
-       <CITY_SLUG_UPPER>_TELEGRAM_BOT_TOKEN.
-    2. TELEGRAM_BOT_TOKEN — legacy single-token fallback, kept so existing
-       deployments don't need an env change.
-
-    Raises ValueError if none are set, naming all candidates so the
-    operator knows what to define.
+    The token must be named <CITY_SLUG_UPPER>_TELEGRAM_BOT_TOKEN, for example
+    NYC_TELEGRAM_BOT_TOKEN or BOSTON_TELEGRAM_BOT_TOKEN.
     """
     city = active_city()
-    token_env_names = (
-        *CITY_TELEGRAM_TOKEN_ENV_ALIASES.get(city.slug, ()),
-        f"{city.slug.upper()}_TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_BOT_TOKEN",
-    )
-    ordered_env_names = tuple(dict.fromkeys(token_env_names))
-    for env_name in ordered_env_names:
-        token = os.getenv(env_name, "").strip()
-        if token:
-            return token
+    env_name = f"{city.slug.upper()}_TELEGRAM_BOT_TOKEN"
+    token = os.getenv(env_name, "").strip()
+    if token:
+        return token
 
-    raise ValueError(
-        "No Telegram bot token found. Set one of: "
-        + ", ".join(ordered_env_names)
-    )
+    raise ValueError(f"No Telegram bot token found. Set {env_name}")
 
 
 def _public_map_base_url() -> str:

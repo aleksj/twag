@@ -5,22 +5,15 @@ TWAG is a Telegram-first, ClickHouse-backed event agent for NY Tech Week and Bos
 ## Credits
 
 - **Atin** started the agent-friendly NY Tech Week event mirror that made this workflow possible.
-- **Nate Aune** ported the experience to Boston, rebuilt the static map/gallery navigation, and pushed the multi-city direction.
 - **Aleks** wired the ClickHouse, Senso, Nimble, Telegram, deployment, and production hardening pieces together.
+- **Nate Aune** ported the experience to Boston, rebuilt the static map/gallery navigation, and pushed the multi-city direction.
 
 ## Try It
 
-| City | Telegram bot | QR |
-| --- | --- | --- |
-| NY Tech Week | [@Twagbot](https://t.me/Twagbot) | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> |
-| Boston Tech Week | [@TwagBostonBot](https://t.me/TwagBostonBot) | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> |
-
-Nate's event navs:
-
-- [Boston map](https://natea.github.io/twag/events_map_boston.html)
-- [Boston gallery](https://natea.github.io/twag/events_gallery_boston.html)
-- [NYC map](https://natea.github.io/twag/events_map_nyc.html)
-- [NYC gallery](https://natea.github.io/twag/events_gallery_nyc.html)
+| City | Telegram bot | QR | Nate's navs |
+| --- | --- | --- | --- |
+| NY Tech Week | [@Twagbot](https://t.me/Twagbot) | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> | [Map](https://natea.github.io/twag/events_map_nyc.html) · [Gallery](https://natea.github.io/twag/events_gallery_nyc.html) |
+| Boston Tech Week | [@TwagBostonBot](https://t.me/TwagBostonBot) | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> | [Map](https://natea.github.io/twag/events_map_boston.html) · [Gallery](https://natea.github.io/twag/events_gallery_boston.html) |
 
 ## How It Works
 
@@ -105,16 +98,14 @@ SUBCONSCIOUS_RUN_ENGINE=tim-gpt
 Telegram bots:
 
 ```bash
-NY_TELEGRAM_BOT_TOKEN=
 NYC_TELEGRAM_BOT_TOKEN=
 BOSTON_TELEGRAM_BOT_TOKEN=
-TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_CHAT_IDS=
 TELEGRAM_POLL_TIMEOUT=30
 TELEGRAM_REQUEST_TIMEOUT=45
 ```
 
-City-specific tokens are preferred. NYC accepts either `NY_TELEGRAM_BOT_TOKEN` or `NYC_TELEGRAM_BOT_TOKEN`; `TELEGRAM_BOT_TOKEN` remains a legacy single-city fallback. In production, run only one polling process per Telegram token.
+Define one token per city. `TWAG_CITY=nyc` reads `NYC_TELEGRAM_BOT_TOKEN`; `TWAG_CITY=boston` reads `BOSTON_TELEGRAM_BOT_TOKEN`. In production, run only one polling process per Telegram token.
 
 Optional Senso and Nimble settings:
 

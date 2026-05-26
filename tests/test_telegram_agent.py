@@ -561,7 +561,7 @@ def test_verbose_mode_final_reply_uses_full_continued_answer():
 
 def test_telegram_config_reads_retry_settings():
     env = {
-        "TELEGRAM_BOT_TOKEN": "token",
+        "NYC_TELEGRAM_BOT_TOKEN": "token",
         "TELEGRAM_POLL_TIMEOUT": "20",
         "TELEGRAM_REQUEST_TIMEOUT": "35",
         "TELEGRAM_RETRY_INITIAL_SECONDS": "3",
@@ -592,7 +592,6 @@ def test_bot_token_resolves_city_specific_var_first():
         "TWAG_CITY": "boston",
         "BOSTON_TELEGRAM_BOT_TOKEN": "boston-token",
         "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
-        "TELEGRAM_BOT_TOKEN": "legacy-token",
     }
 
     with patch.dict(os.environ, env, clear=True):
@@ -601,25 +600,10 @@ def test_bot_token_resolves_city_specific_var_first():
     assert config.bot_token == "boston-token"
 
 
-def test_telegram_config_reads_ny_city_token_alias():
-    env = {
-        "TWAG_CITY": "nyc",
-        "NY_TELEGRAM_BOT_TOKEN": "ny-token",
-        "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
-        "TELEGRAM_BOT_TOKEN": "legacy-token",
-    }
-
-    with patch.dict(os.environ, env, clear=True):
-        config = TelegramAgentConfig.from_env()
-
-    assert config.bot_token == "ny-token"
-
-
-def test_telegram_config_reads_nyc_city_token_alias():
+def test_telegram_config_reads_nyc_city_token():
     env = {
         "TWAG_CITY": "nyc",
         "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
-        "TELEGRAM_BOT_TOKEN": "legacy-token",
     }
 
     with patch.dict(os.environ, env, clear=True):
@@ -628,15 +612,35 @@ def test_telegram_config_reads_nyc_city_token_alias():
     assert config.bot_token == "nyc-token"
 
 
-def test_bot_token_falls_back_to_legacy_var():
+def test_bot_token_rejects_old_ny_alias():
+    old_ny_token_env = "NY" + "_TELEGRAM_BOT_TOKEN"
     env = {
         "TWAG_CITY": "nyc",
-        "TELEGRAM_BOT_TOKEN": "legacy-token",
+        old_ny_token_env: "ny-token",
     }
     with patch.dict(os.environ, env, clear=True):
-        config = TelegramAgentConfig.from_env()
+        try:
+            TelegramAgentConfig.from_env()
+        except ValueError as exc:
+            assert "NYC_TELEGRAM_BOT_TOKEN" in str(exc)
+            assert old_ny_token_env not in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
 
-    assert config.bot_token == "legacy-token"
+
+def test_bot_token_rejects_legacy_var():
+    legacy_token_env = "TELEGRAM" + "_BOT_TOKEN"
+    env = {
+        "TWAG_CITY": "nyc",
+        legacy_token_env: "legacy-token",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        try:
+            TelegramAgentConfig.from_env()
+        except ValueError as exc:
+            assert "NYC_TELEGRAM_BOT_TOKEN" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
 
 
 def test_bot_token_raises_when_neither_var_is_set():
@@ -646,7 +650,6 @@ def test_bot_token_raises_when_neither_var_is_set():
             TelegramAgentConfig.from_env()
         except ValueError as exc:
             assert "BOSTON_TELEGRAM_BOT_TOKEN" in str(exc)
-            assert "TELEGRAM_BOT_TOKEN" in str(exc)
         else:
             raise AssertionError("expected ValueError")
 

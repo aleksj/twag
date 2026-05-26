@@ -16,16 +16,14 @@ of starting the process under the right environment — not code changes.
 
 ## Picking the bot token
 
-The bot resolves its token in this order:
+The bot resolves exactly one token name from the active city:
 
-1. City-specific token names. For NYC, both `NY_TELEGRAM_BOT_TOKEN` and
-   `NYC_TELEGRAM_BOT_TOKEN` are supported. For Boston, use
-   `BOSTON_TELEGRAM_BOT_TOKEN`. **Use this for any multi-city setup**: define
-   both tokens in one env file and each bot process picks the right one.
-2. `TELEGRAM_BOT_TOKEN` — legacy single-token fallback. Kept so existing
-   single-city deployments don't need to change anything.
+- `TWAG_CITY=nyc` reads `NYC_TELEGRAM_BOT_TOKEN`.
+- `TWAG_CITY=boston` reads `BOSTON_TELEGRAM_BOT_TOKEN`.
 
-If neither is set the bot fails fast with both candidate names in the error.
+Define both tokens in one env file for a multi-city setup. Each bot process
+picks the right token from `TWAG_CITY`. If the matching token is unset, the bot
+fails fast with the required env var name.
 
 ## Local run
 
@@ -43,8 +41,7 @@ in your `.env` and just vary `TWAG_CITY` + the lock file per process:
 
 ```bash
 # .env (one file holds both)
-NY_TELEGRAM_BOT_TOKEN=<nyc-token>
-# NYC_TELEGRAM_BOT_TOKEN=<nyc-token> also works
+NYC_TELEGRAM_BOT_TOKEN=<nyc-token>
 BOSTON_TELEGRAM_BOT_TOKEN=<boston-token>
 ```
 
@@ -82,14 +79,9 @@ env file. Per-city Telegram bot tokens make this safe.
 
    ```bash
    # /etc/twag/twag.env — keep existing NYC values, add:
-   NY_TELEGRAM_BOT_TOKEN=<nyc-bot-token>       # NYC_TELEGRAM_BOT_TOKEN also works
+   NYC_TELEGRAM_BOT_TOKEN=<nyc-bot-token>
    BOSTON_TELEGRAM_BOT_TOKEN=<boston-bot-token>
    ```
-
-   You can keep `TELEGRAM_BOT_TOKEN=...` for back-compat — the NYC process
-   will fall back to it if `NY_TELEGRAM_BOT_TOKEN` and
-   `NYC_TELEGRAM_BOT_TOKEN` are unset. No NYC change
-   required to enable the Boston bot.
 
 2. Create a Boston copy of the unit file with `TWAG_CITY=boston` baked in:
 
@@ -135,7 +127,6 @@ Set:
 ```bash
 TWAG_CITY=boston
 BOSTON_TELEGRAM_BOT_TOKEN=<boston-bot-token>
-# (or leave TELEGRAM_BOT_TOKEN=<boston-bot-token> if you prefer the legacy var)
 ```
 
 Then restart:
