@@ -1,0 +1,24 @@
+[Unit]
+Description=TWAG local operator browser terminal (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=/etc/twag/twag.env
+ExecStart=__APP_DIR__/.venv/bin/twag-terminal-server
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/log/twag
+
+[Install]
+WantedBy=multi-user.target

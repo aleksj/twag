@@ -1,0 +1,291 @@
+:root {
+  color-scheme: dark;
+  --ink: #e9e3d5;
+  --muted: #9c9589;
+  --faint: #5f5a51;
+  --panel: #151411;
+  --panel-2: #1d1b16;
+  --line: #3a3429;
+  --accent: #f0c15a;
+  --accent-2: #75d1c2;
+  --danger: #ff7468;
+  --ok: #a4d26f;
+  --shadow: rgba(0, 0, 0, 0.42);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(240, 193, 90, 0.04) 1px, transparent 1px),
+    linear-gradient(rgba(240, 193, 90, 0.035) 1px, transparent 1px),
+    #0c0b09;
+  background-size: 34px 34px;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.shell {
+  display: flex;
+  height: 100vh;
+  flex-direction: column;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 2px 2px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--accent);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 8px;
+}
+
+.meta span {
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.shell[data-state="connected"] #connectionState {
+  border-color: rgba(164, 210, 111, 0.5);
+  color: var(--ok);
+}
+
+.shell[data-state="error"] #connectionState,
+.shell[data-state="closed"] #connectionState {
+  border-color: rgba(255, 116, 104, 0.5);
+  color: var(--danger);
+}
+
+.workspace {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  min-height: 0;
+  gap: 16px;
+  padding-top: 16px;
+}
+
+.status-panel,
+.terminal-pane {
+  border: 1px solid var(--line);
+  background: rgba(21, 20, 17, 0.94);
+  box-shadow: 0 18px 48px var(--shadow);
+}
+
+.status-panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.panel-title {
+  margin: 2px 0 8px;
+  color: var(--accent);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+#statusText {
+  overflow: auto;
+  min-height: 180px;
+  max-height: 45vh;
+  margin: 0 0 18px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #0f0e0c;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.command-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.command-grid button,
+.prompt button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.command-grid button:hover,
+.prompt button:hover,
+.command-grid button:focus-visible,
+.prompt button:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.terminal-pane {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.transcript {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 18px;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+}
+
+.message {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(58, 52, 41, 0.55);
+}
+
+.role {
+  color: var(--accent-2);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.message.user .role {
+  color: var(--ok);
+}
+
+.message.system .role {
+  color: var(--danger);
+}
+
+.content {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.48;
+}
+
+.content strong {
+  color: var(--accent);
+}
+
+.content code {
+  color: var(--accent-2);
+}
+
+.content a {
+  color: var(--accent-2);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.content a:hover,
+.content a:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.prompt {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 88px;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  background: #0f0e0c;
+}
+
+.prompt label {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.prompt input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  background: #080806;
+  color: var(--ink);
+  padding: 0 12px;
+}
+
+.prompt input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+@media (max-width: 820px) {
+  .shell {
+    padding: 12px;
+  }
+
+  .topbar {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .meta {
+    justify-content: start;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .status-panel {
+    min-height: auto;
+  }
+
+  #statusText {
+    min-height: 92px;
+    max-height: 160px;
+  }
+
+  .message {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
