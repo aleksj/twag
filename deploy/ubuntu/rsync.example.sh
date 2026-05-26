@@ -72,12 +72,13 @@ Run on the Ubuntu host:
   sudo systemctl enable --now twag-telegram-agent@$REMOTE_USER.service
   sudo systemctl enable --now twag-telegram-agent-boston@$REMOTE_USER.service
   sudo systemctl enable --now twag-nimble@$REMOTE_USER.service
+  sudo systemctl enable --now twag-terminal@$REMOTE_USER.service
 
 For an existing deployment, restart instead:
-  sudo systemctl restart twag-telegram-agent@$REMOTE_USER.service twag-telegram-agent-boston@$REMOTE_USER.service twag-nimble@$REMOTE_USER.service
+  sudo systemctl restart twag-telegram-agent@$REMOTE_USER.service twag-telegram-agent-boston@$REMOTE_USER.service twag-nimble@$REMOTE_USER.service twag-terminal@$REMOTE_USER.service
 
 Then check:
-  systemctl status twag-telegram-agent@$REMOTE_USER.service twag-telegram-agent-boston@$REMOTE_USER.service twag-nimble@$REMOTE_USER.service --no-pager
+  systemctl status twag-telegram-agent@$REMOTE_USER.service twag-telegram-agent-boston@$REMOTE_USER.service twag-nimble@$REMOTE_USER.service twag-terminal@$REMOTE_USER.service --no-pager
 EOF
 else
   cat <<EOF
@@ -96,5 +97,8 @@ Run on the Ubuntu host:
   ssh -p $SSH_PORT $REMOTE_USER@$REMOTE_HOST
   cd $REMOTE_DIR
   SERVICE_USER=$REMOTE_USER deploy/ubuntu/install-after-rsync.sh
+
+Then enable/start services:
+  sudo systemctl enable --now twag-telegram-agent@$REMOTE_USER.service twag-telegram-agent-boston@$REMOTE_USER.service twag-nimble@$REMOTE_USER.service twag-terminal@$REMOTE_USER.service
 EOF
 fi

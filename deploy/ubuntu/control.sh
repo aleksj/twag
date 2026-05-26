@@ -9,11 +9,13 @@ case "$ACTION" in
     sudo systemctl "$ACTION" "twag-telegram-agent@$SERVICE_USER.service"
     sudo systemctl "$ACTION" "twag-telegram-agent-boston@$SERVICE_USER.service"
     sudo systemctl "$ACTION" "twag-nimble@$SERVICE_USER.service"
+    sudo systemctl "$ACTION" "twag-terminal@$SERVICE_USER.service"
     ;;
   logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
       -u "twag-telegram-agent-boston@$SERVICE_USER.service" \
-      -u "twag-nimble@$SERVICE_USER.service" -f
+      -u "twag-nimble@$SERVICE_USER.service" \
+      -u "twag-terminal@$SERVICE_USER.service" -f
     ;;
   telegram-logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
@@ -28,6 +30,9 @@ case "$ACTION" in
   nimble-logs)
     journalctl -u "twag-nimble@$SERVICE_USER.service" -f
     ;;
+  terminal-logs)
+    journalctl -u "twag-terminal@$SERVICE_USER.service" -f
+    ;;
   diagnose)
     echo "NY systemd unit:"
     systemctl cat "twag-telegram-agent@$SERVICE_USER.service"
@@ -35,8 +40,11 @@ case "$ACTION" in
     echo "Boston systemd unit:"
     systemctl cat "twag-telegram-agent-boston@$SERVICE_USER.service"
     echo
+    echo "terminal systemd unit:"
+    systemctl cat "twag-terminal@$SERVICE_USER.service"
+    echo
     echo "running processes:"
-    ps -eo pid,ppid,user,lstart,command | grep -E 'twag-telegram-agent|twag telegram-agent' | grep -v grep || true
+    ps -eo pid,ppid,user,lstart,command | grep -E 'twag-telegram-agent|twag telegram-agent|twag-terminal-server|twag terminal-server' | grep -v grep || true
     echo
     echo "import diagnostics:"
     python_bin="$(pwd)/.venv/bin/python"
@@ -72,6 +80,7 @@ Usage:
   deploy/ubuntu/control.sh ny-telegram-logs
   deploy/ubuntu/control.sh boston-telegram-logs
   deploy/ubuntu/control.sh nimble-logs
+  deploy/ubuntu/control.sh terminal-logs
   deploy/ubuntu/control.sh diagnose
 
 Set SERVICE_USER=name if the systemd instance user is not the current user.

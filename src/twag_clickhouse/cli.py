@@ -199,6 +199,13 @@ def run_telegram_nytw_agent(_: argparse.Namespace) -> int:
     return run_telegram_agent()
 
 
+def run_terminal_server(_: argparse.Namespace) -> int:
+    from .terminal_server import main as terminal_server_main
+
+    terminal_server_main()
+    return 0
+
+
 def geocode_venues(args: argparse.Namespace) -> int:
     result = geocode_city(refresh=args.refresh, limit=args.limit)
     _print_json(result)
@@ -413,6 +420,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the TWAG agent as a Telegram long-polling bot",
     )
     telegram_agent_parser.set_defaults(func=run_telegram_nytw_agent)
+
+    terminal_server_parser = subparsers.add_parser(
+        "terminal-server",
+        help="Run the local-only TWAG terminal WebSocket backend",
+    )
+    terminal_server_parser.set_defaults(func=run_terminal_server)
 
     geocode_parser = subparsers.add_parser(
         "geocode-venues",

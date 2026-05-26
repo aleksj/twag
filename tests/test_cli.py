@@ -19,6 +19,12 @@ def test_ask_nytw_agent_parser_accepts_verbose_flag() -> None:
     assert args.question == "hello"
 
 
+def test_terminal_server_parser() -> None:
+    args = build_parser().parse_args(["terminal-server"])
+
+    assert args.command == "terminal-server"
+
+
 def test_sync_senso_parser_accepts_replace_and_chunk_options() -> None:
     args = build_parser().parse_args(
         [
