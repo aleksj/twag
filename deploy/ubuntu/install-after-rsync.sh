@@ -56,7 +56,11 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-for unit in twag-telegram-agent@.service twag-telegram-agent-boston@.service twag-nimble@.service; do
+for unit in \
+  twag-telegram-agent@.service \
+  twag-telegram-agent-boston@.service \
+  twag-nimble@.service \
+  twag-terminal@.service; do
   sed "s#__APP_DIR__#$APP_DIR#g" "$APP_DIR/deploy/ubuntu/$unit" > "$tmpdir/$unit"
   sudo install -m 0644 "$tmpdir/$unit" "$SYSTEMD_DIR/$unit"
 done
@@ -81,6 +85,7 @@ Installed unit templates:
   twag-telegram-agent@.service (NYC)
   twag-telegram-agent-boston@.service
   twag-nimble@.service
+  twag-terminal@.service
 
 Check or edit secrets before starting:
   sudoedit $ENV_FILE
@@ -89,16 +94,18 @@ Enable and start all services:
   sudo systemctl enable --now twag-telegram-agent@$SERVICE_USER.service
   sudo systemctl enable --now twag-telegram-agent-boston@$SERVICE_USER.service
   sudo systemctl enable --now twag-nimble@$SERVICE_USER.service
+  sudo systemctl enable --now twag-terminal@$SERVICE_USER.service
 
 Or restart already-enabled services after a deploy:
-  sudo systemctl restart twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-nimble@$SERVICE_USER.service
+  sudo systemctl restart twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-nimble@$SERVICE_USER.service twag-terminal@$SERVICE_USER.service
 
 Check status:
-  systemctl status twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-nimble@$SERVICE_USER.service --no-pager
+  systemctl status twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-nimble@$SERVICE_USER.service twag-terminal@$SERVICE_USER.service --no-pager
 
 Logs:
   journalctl -u twag-telegram-agent@$SERVICE_USER.service -f
   journalctl -u twag-telegram-agent-boston@$SERVICE_USER.service -f
   journalctl -u twag-nimble@$SERVICE_USER.service -f
+  journalctl -u twag-terminal@$SERVICE_USER.service -f
 
 EOF

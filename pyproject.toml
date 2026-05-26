@@ -8,6 +8,7 @@ dependencies = [
   "fastapi>=0.115.0",
   "python-dotenv>=1.0.1",
   "uvicorn>=0.30.0",
+  "websockets>=12.0",
   "playwright>=1.48.0",
   "pillow>=10.0.0",
 ]
@@ -17,6 +18,7 @@ twag = "twag_clickhouse.cli:main"
 twag-clickhouse = "twag_clickhouse.cli:main"
 twag-nytw-tool-server = "twag_clickhouse.tool_server:main"
 twag-telegram-agent = "twag_clickhouse.telegram_agent:main"
+twag-terminal-server = "twag_clickhouse.terminal_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -24,6 +26,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+twag_clickhouse = ["terminal_web/*.html", "terminal_web/*.css", "terminal_web/*.js"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
