@@ -1,22 +1,31 @@
 # TWAG Tech Week Bot
 
-TWAG is a Telegram-first, ClickHouse-backed event agent for NY Tech Week and Boston Tech Week 2026. It can answer practical event questions, point people to maps and galleries, and run the same stack against either city's dataset.
+TWAG is a data-backed event guide for NY Tech Week and Boston Tech Week
+2026. Ask it practical questions about events, hosts, neighborhoods, topics,
+times, RSVP status, and capacity; or browse the public maps and galleries.
+
+No setup is needed to try it. Use the browser terminal for the fastest path, or
+open the bot for the city you care about.
+
+## Try It
+
+|  | NY Tech Week | Boston Tech Week |
+| --- | --- | --- |
+| Bot: terminal | [Open browser terminal](http://46.224.170.22:8765/terminal?city=nyc) | [Open browser terminal](http://46.224.170.22:8765/terminal?city=boston) |
+| Bot: Telegram | [@Twagbot](https://t.me/Twagbot) | [@TwagBostonBot](https://t.me/TwagBostonBot) |
+| Bot: Telegram QR | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> |
+| Gallery | [Browse gallery](https://natea.github.io/twag/events_gallery_nyc.html) | [Browse gallery](https://natea.github.io/twag/events_gallery_boston.html) |
+| Map | [Open map](https://natea.github.io/twag/events_map_nyc.html) | [Open map](https://natea.github.io/twag/events_map_boston.html) |
+
+The browser terminal is the web alternative to Telegram and is preconfigured
+for public access on the deployed host. It supports `/city nyc`, `/city boston`,
+`/map`, `/help`, and follow-up requests like `more`.
 
 ## Credits
 
 - **Atin** started the agent-friendly NY Tech Week event mirror that made this workflow possible.
 - **Aleks** wired the ClickHouse, Senso, Nimble, Telegram, deployment, and production hardening pieces together.
 - **Nate Aune** ported the experience to Boston, rebuilt the static map/gallery navigation, and pushed the multi-city direction.
-
-## Try It
-
-| City | Telegram bot | Browser terminal | QR | Nate's navs |
-| --- | --- | --- | --- | --- |
-| NY Tech Week | [@Twagbot](https://t.me/Twagbot) | [Open terminal](http://46.224.170.22:8765/terminal?city=nyc) | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> | [Map](https://natea.github.io/twag/events_map_nyc.html) · [Gallery](https://natea.github.io/twag/events_gallery_nyc.html) |
-| Boston Tech Week | [@TwagBostonBot](https://t.me/TwagBostonBot) | [Open terminal](http://46.224.170.22:8765/terminal?city=boston) | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> | [Map](https://natea.github.io/twag/events_map_boston.html) · [Gallery](https://natea.github.io/twag/events_gallery_boston.html) |
-
-The browser terminal is the web alternative to Telegram and is preconfigured
-for public access on the deployed host.
 
 ## How It Works
 

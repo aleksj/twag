@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TWAG Local Terminal</title>
+    <link rel="stylesheet" href="/terminal/styles.css">
+  </head>
+  <body>
+    <main class="shell" data-state="booting">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">operator console</p>
+          <h1>TWAG Terminal</h1>
+        </div>
+        <div class="meta">
+          <span id="connectionState">booting</span>
+          <span id="cityState">city: --</span>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="TWAG terminal">
+        <aside class="status-panel" aria-label="Status">
+          <div class="panel-title">status</div>
+          <pre id="statusText">Starting local session...</pre>
+          <div class="panel-title">commands</div>
+          <div class="command-grid">
+            <button type="button" data-command="/city nyc">NYC</button>
+            <button type="button" data-command="/city boston">Boston</button>
+            <button type="button" data-command="/verbose">Verbose</button>
+            <button type="button" data-command="/quiet">Quiet</button>
+            <button type="button" data-command="/map">Map</button>
+            <button type="button" data-command="/help">Help</button>
+          </div>
+        </aside>
+
+        <section class="terminal-pane">
+          <div id="transcript" class="transcript" aria-live="polite"></div>
+          <form id="promptForm" class="prompt" autocomplete="off">
+            <label for="promptInput">&gt;</label>
+            <input
+              id="promptInput"
+              name="prompt"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="Ask about events, type more, or use /city boston"
+            >
+            <button type="submit">Send</button>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/terminal/app.js"></script>
+  </body>
+</html>
