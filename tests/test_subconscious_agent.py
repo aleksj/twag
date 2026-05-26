@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
+from twag_clickhouse.city import BOSTON
 from twag_clickhouse.subconscious_agent import (
     NytwSubconsciousAgent,
     SubconsciousConfig,
     UnsafeQueryError,
     add_default_limit,
+    build_system_prompt,
     build_keyword_event_query,
     clean_model_answer,
     expanded_keyword_terms,
@@ -78,6 +81,18 @@ def test_looks_like_planning_leak_detects_verbose_process_output() -> None:
     assert looks_like_planning_leak(content)
     assert looks_like_planning_leak("<think>I need to call query_nytw_clickhouse with SQL</think>")
     assert not looks_like_planning_leak("There are 1,360 live events.")
+
+
+def test_system_prompt_includes_current_local_date_context() -> None:
+    prompt = build_system_prompt(
+        BOSTON,
+        now=datetime(2026, 5, 26, 0, 49, tzinfo=timezone.utc),
+    )
+
+    assert "Current local date: Monday, 2026-05-25" in prompt
+    assert "Current local datetime: 2026-05-25 20:49:00 EDT" in prompt
+    assert "Dataset event date range: May 24-31, 2026" in prompt
+    assert 'Interpret relative dates like "today", "tomorrow"' in prompt
 
 
 def test_response_was_truncated_detects_length_finish_reason() -> None:

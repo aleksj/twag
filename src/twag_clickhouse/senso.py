@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import hashlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -59,6 +60,17 @@ SENSO_SYNC_RUN_COLUMNS = (
     "documents",
     "chunks",
     "error",
+)
+SENSO_SYNC_CHANGE_COLUMNS = (
+    "run_id",
+    "synced_at",
+    "change_type",
+    "kb_node_id",
+    "path",
+    "title",
+    "previous_content_hash",
+    "content_hash",
+    "previous_synced_at",
 )
 
 
@@ -297,6 +309,24 @@ def create_senso_tables(service: ClickHouseService) -> None:
         ORDER BY (started_at, run_id)
         """
     )
+    service.command(
+        """
+        CREATE TABLE IF NOT EXISTS senso_sync_changes
+        (
+            run_id String,
+            synced_at DateTime64(3, 'UTC'),
+            change_type LowCardinality(String),
+            kb_node_id String,
+            path String,
+            title String,
+            previous_content_hash String,
+            content_hash String,
+            previous_synced_at Nullable(DateTime64(3, 'UTC'))
+        )
+        ENGINE = MergeTree
+        ORDER BY (run_id, change_type, kb_node_id)
+        """
+    )
 
 
 def truncate_senso_tables(service: ClickHouseService) -> None:
@@ -316,12 +346,18 @@ def sync_senso_kb(
     run_id = str(uuid4())
     started_at = datetime.now(timezone.utc)
     create_senso_tables(service)
+    previous_documents = _latest_senso_documents(service)
+    previous_nodes = _latest_senso_nodes(service)
     if replace:
         truncate_senso_tables(service)
+        previous_documents = {}
+        previous_nodes = {}
 
     node_rows: list[tuple[Any, ...]] = []
     document_rows: list[tuple[Any, ...]] = []
     chunk_rows: list[tuple[Any, ...]] = []
+    change_rows: list[tuple[Any, ...]] = []
+    current_document_ids: set[str] = set()
     error = ""
     status = "complete"
 
@@ -331,22 +367,42 @@ def sync_senso_kb(
             content_id = _first_string(node.raw, "content_id", "contentId")
             version = _as_int_or_none(node.raw.get("version") or node.raw.get("version_num"))
             processing_status = _first_string(node.raw, "processing_status", "status")
-            node_rows.append(
-                (
-                    node.kb_node_id,
-                    node.parent_id,
-                    node.path,
-                    node.name,
-                    node.node_type,
-                    content_id,
-                    version,
-                    processing_status,
-                    json.dumps(node.raw, sort_keys=True, default=str),
-                    synced_at,
+            previous_node = previous_nodes.get(node.kb_node_id)
+            if previous_node is None or not _node_metadata_unchanged(node, previous_node):
+                node_rows.append(
+                    (
+                        node.kb_node_id,
+                        node.parent_id,
+                        node.path,
+                        node.name,
+                        node.node_type,
+                        content_id,
+                        version,
+                        processing_status,
+                        json.dumps(node.raw, sort_keys=True, default=str),
+                        synced_at,
+                    )
                 )
-            )
 
             if not node.is_folder:
+                current_document_ids.add(node.kb_node_id)
+                previous = previous_documents.get(node.kb_node_id)
+                if _can_skip_senso_download(node, previous, previous_node):
+                    change_rows.append(
+                        (
+                            run_id,
+                            synced_at,
+                            "unchanged",
+                            node.kb_node_id,
+                            node.path,
+                            str(previous.get("title") or node.name),
+                            str(previous.get("content_hash") or ""),
+                            str(previous.get("content_hash") or ""),
+                            previous.get("synced_at"),
+                        )
+                    )
+                    continue
+
                 content = _safe_content(senso, node.kb_node_id)
                 download = _safe_download_url(senso, node.kb_node_id)
                 filename = _first_string(download, "filename") or node.name
@@ -357,6 +413,28 @@ def sync_senso_kb(
                 title = _first_string(content, "title", "name") or node.name
                 summary = _first_string(content, "summary", "description")
                 content_hash = _first_string(content, "content_hash_md5", "hash", "md5")
+                if not content_hash and text:
+                    content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                previous_hash = str(previous.get("content_hash") or "") if previous else ""
+                if previous is None:
+                    change_type = "inserted"
+                elif previous_hash != content_hash:
+                    change_type = "updated"
+                else:
+                    change_type = "unchanged"
+                change_rows.append(
+                    (
+                        run_id,
+                        synced_at,
+                        change_type,
+                        node.kb_node_id,
+                        node.path,
+                        title,
+                        previous_hash,
+                        content_hash,
+                        previous.get("synced_at") if previous else None,
+                    )
+                )
                 document_rows.append(
                     (
                         node.kb_node_id,
@@ -397,6 +475,25 @@ def sync_senso_kb(
         _insert(service, "senso_kb_nodes", node_rows, SENSO_NODE_COLUMNS)
         _insert(service, "senso_kb_documents", document_rows, SENSO_DOCUMENT_COLUMNS)
         _insert(service, "senso_kb_chunks", chunk_rows, SENSO_CHUNK_COLUMNS)
+        removed_at = datetime.now(timezone.utc)
+        for kb_node_id, previous in previous_documents.items():
+            if kb_node_id in current_document_ids:
+                continue
+            previous_node = previous_nodes.get(kb_node_id, {})
+            change_rows.append(
+                (
+                    run_id,
+                    removed_at,
+                    "removed",
+                    kb_node_id,
+                    str(previous_node.get("path") or ""),
+                    str(previous.get("title") or ""),
+                    str(previous.get("content_hash") or ""),
+                    "",
+                    previous.get("synced_at"),
+                )
+            )
+        _insert(service, "senso_sync_changes", change_rows, SENSO_SYNC_CHANGE_COLUMNS)
     except Exception as exc:
         status = "failed"
         error = str(exc)
@@ -425,6 +522,103 @@ def sync_senso_kb(
         "run_id": run_id,
         "status": status,
         **_latest_senso_counts(service),
+        "changes": summarize_change_rows(change_rows),
+    }
+
+
+def summarize_change_rows(rows: Sequence[Sequence[Any]]) -> dict[str, int]:
+    summary = {
+        "inserted": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "removed": 0,
+    }
+    for row in rows:
+        change_type = str(row[2]) if len(row) > 2 else ""
+        if change_type in summary:
+            summary[change_type] += 1
+    return summary
+
+
+def senso_sync_overview(
+    service: ClickHouseService,
+    *,
+    limit: int = 1,
+    item_limit: int = 25,
+) -> dict[str, Any]:
+    limit = max(1, min(limit, 50))
+    item_limit = max(0, min(item_limit, 200))
+    runs = service.query(
+        f"""
+        SELECT
+          run_id,
+          started_at,
+          finished_at,
+          status,
+          nodes,
+          documents,
+          chunks,
+          error
+        FROM senso_sync_runs
+        ORDER BY started_at DESC
+        LIMIT {limit}
+        """
+    )
+    run_ids = [str(run.get("run_id") or "") for run in runs if run.get("run_id")]
+    if not run_ids:
+        return {"runs": []}
+
+    run_ids_sql = _clickhouse_string_array(run_ids)
+    summary_rows = _safe_query(
+        service,
+        f"""
+        SELECT run_id, change_type, count() AS count
+        FROM senso_sync_changes
+        WHERE run_id IN {run_ids_sql}
+        GROUP BY run_id, change_type
+        """,
+    )
+    summary_by_run: dict[str, dict[str, int]] = {
+        run_id: {"inserted": 0, "updated": 0, "unchanged": 0, "removed": 0}
+        for run_id in run_ids
+    }
+    for row in summary_rows:
+        run_id = str(row.get("run_id") or "")
+        change_type = str(row.get("change_type") or "")
+        if run_id in summary_by_run and change_type in summary_by_run[run_id]:
+            summary_by_run[run_id][change_type] = int(row.get("count") or 0)
+
+    changed_items: list[dict[str, Any]] = []
+    if item_limit:
+        changed_items = _safe_query(
+            service,
+            f"""
+            SELECT
+              run_id,
+              change_type,
+              kb_node_id,
+              path,
+              title,
+              previous_content_hash,
+              content_hash,
+              synced_at
+            FROM senso_sync_changes
+            WHERE run_id IN {run_ids_sql}
+              AND change_type IN ('inserted', 'updated', 'removed')
+            ORDER BY synced_at DESC, title ASC
+            LIMIT {item_limit}
+            """,
+        )
+
+    return {
+        "runs": [
+            {
+                **run,
+                "changes": summary_by_run.get(str(run.get("run_id") or ""), {}),
+            }
+            for run in runs
+        ],
+        "changed_items": changed_items,
     }
 
 
@@ -527,6 +721,130 @@ def _latest_senso_counts(service: ClickHouseService) -> dict[str, int]:
     except Exception:
         pass
     return {"nodes": 0, "documents": 0, "chunks": 0}
+
+
+def _latest_senso_documents(service: ClickHouseService) -> dict[str, dict[str, Any]]:
+    rows = _safe_query(
+        service,
+        """
+        SELECT
+          kb_node_id,
+          argMax(title, synced_at) AS title,
+          argMax(content_hash, synced_at) AS content_hash,
+          max(synced_at) AS synced_at
+        FROM senso_kb_documents
+        GROUP BY kb_node_id
+        """,
+    )
+    documents: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        kb_node_id = str(row.get("kb_node_id") or "")
+        if kb_node_id:
+            documents[kb_node_id] = row
+    return documents
+
+
+def _latest_senso_nodes(service: ClickHouseService) -> dict[str, dict[str, Any]]:
+    rows = _safe_query(
+        service,
+        """
+        SELECT
+          kb_node_id,
+          argMax(parent_id, synced_at) AS parent_id,
+          argMax(path, synced_at) AS path,
+          argMax(name, synced_at) AS name,
+          argMax(node_type, synced_at) AS node_type,
+          argMax(content_id, synced_at) AS content_id,
+          argMax(version, synced_at) AS version,
+          argMax(processing_status, synced_at) AS processing_status,
+          argMax(raw_json, synced_at) AS raw_json,
+          max(synced_at) AS synced_at
+        FROM senso_kb_nodes
+        GROUP BY kb_node_id
+        """,
+    )
+    nodes: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        kb_node_id = str(row.get("kb_node_id") or "")
+        if kb_node_id:
+            nodes[kb_node_id] = row
+    return nodes
+
+
+def _can_skip_senso_download(
+    node: SensoNode,
+    previous_document: dict[str, Any] | None,
+    previous_node: dict[str, Any] | None,
+) -> bool:
+    if previous_document is None or previous_node is None:
+        return False
+    if not str(previous_document.get("content_hash") or ""):
+        return False
+    return _node_metadata_unchanged(node, previous_node)
+
+
+def _node_metadata_unchanged(node: SensoNode, previous_node: dict[str, Any]) -> bool:
+    return _node_signature(node) == _previous_node_signature(previous_node)
+
+
+def _node_signature(node: SensoNode) -> str:
+    return hashlib.sha256(
+        json.dumps(_node_signature_payload(node), sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _previous_node_signature(row: dict[str, Any]) -> str:
+    raw_json = str(row.get("raw_json") or "")
+    raw: dict[str, Any] = {}
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+            if isinstance(parsed, dict):
+                raw = parsed
+        except json.JSONDecodeError:
+            raw = {}
+
+    payload = {
+        "parent_id": str(row.get("parent_id") or ""),
+        "path": str(row.get("path") or ""),
+        "name": str(row.get("name") or ""),
+        "node_type": str(row.get("node_type") or ""),
+        "content_id": str(row.get("content_id") or ""),
+        "version": _as_int_or_none(row.get("version")),
+        "processing_status": str(row.get("processing_status") or ""),
+        "raw": raw,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _node_signature_payload(node: SensoNode) -> dict[str, Any]:
+    return {
+        "parent_id": node.parent_id,
+        "path": node.path,
+        "name": node.name,
+        "node_type": node.node_type,
+        "content_id": _first_string(node.raw, "content_id", "contentId"),
+        "version": _as_int_or_none(node.raw.get("version") or node.raw.get("version_num")),
+        "processing_status": _first_string(node.raw, "processing_status", "status"),
+        "raw": node.raw,
+    }
+
+
+def _safe_query(service: ClickHouseService, sql: str) -> list[dict[str, Any]]:
+    try:
+        return service.query(sql)
+    except Exception:
+        return []
+
+
+def _clickhouse_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _clickhouse_string_array(values: Sequence[str]) -> str:
+    return "(" + ", ".join(_clickhouse_string(value) for value in values) + ")"
 
 
 def _first_string(value: dict[str, Any], *keys: str) -> str:

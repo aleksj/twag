@@ -11,7 +11,7 @@ except ImportError:
     load_dotenv = None
 
 try:
-    from fastapi import FastAPI, Header, HTTPException
+    from fastapi import FastAPI, Header, HTTPException, Response
     from pydantic import BaseModel, Field
 except ImportError as exc:  # pragma: no cover - exercised only when deps missing
     raise RuntimeError(
@@ -26,6 +26,12 @@ from .subconscious_agent import add_default_limit, validate_nytw_query
 
 logger = logging.getLogger(__name__)
 _sync_thread_started = False
+UVICORN_SCANNER_NOISE = "Invalid HTTP request received."
+
+
+class _UvicornScannerNoiseFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return UVICORN_SCANNER_NOISE not in record.getMessage()
 
 
 class QueryRequest(BaseModel):
@@ -61,6 +67,14 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None or value == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _configure_uvicorn_logging() -> None:
+    if not _env_bool("NYTW_TOOL_SUPPRESS_SCANNER_NOISE", True):
+        return
+    uvicorn_error = logging.getLogger("uvicorn.error")
+    if not any(isinstance(filter_, _UvicornScannerNoiseFilter) for filter_ in uvicorn_error.filters):
+        uvicorn_error.addFilter(_UvicornScannerNoiseFilter())
 
 
 def _run_senso_sync_loop() -> None:
@@ -113,6 +127,23 @@ def health() -> dict[str, Any]:
     return {"ok": service.ping(), "config": service.config.safe_dict()}
 
 
+@app.get("/")
+def root() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "service": "NYTechWeek ClickHouse Tool",
+        "endpoints": {
+            "health": "/health",
+            "query": "/query",
+        },
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(status_code=204)
+
+
 @app.post("/query")
 def query(
     request: QueryRequest,
@@ -139,12 +170,15 @@ def main() -> None:
         load_dotenv(".env", override=False)
 
     import uvicorn
+    _configure_uvicorn_logging()
 
     uvicorn.run(
         "twag_clickhouse.tool_server:app",
         host=os.getenv("NYTW_TOOL_HOST", "0.0.0.0"),
         port=int(os.getenv("NYTW_TOOL_PORT", "8000")),
         reload=os.getenv("NYTW_TOOL_RELOAD", "").lower() in {"1", "true", "yes"},
+        access_log=_env_bool("NYTW_TOOL_ACCESS_LOG", False),
+        log_level=os.getenv("NYTW_TOOL_LOG_LEVEL", "info"),
     )
 
 

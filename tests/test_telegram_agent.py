@@ -594,10 +594,38 @@ def test_bot_token_resolves_city_specific_var_first():
         "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
         "TELEGRAM_BOT_TOKEN": "legacy-token",
     }
+
     with patch.dict(os.environ, env, clear=True):
         config = TelegramAgentConfig.from_env()
 
     assert config.bot_token == "boston-token"
+
+
+def test_telegram_config_reads_ny_city_token_alias():
+    env = {
+        "TWAG_CITY": "nyc",
+        "NY_TELEGRAM_BOT_TOKEN": "ny-token",
+        "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
+        "TELEGRAM_BOT_TOKEN": "legacy-token",
+    }
+
+    with patch.dict(os.environ, env, clear=True):
+        config = TelegramAgentConfig.from_env()
+
+    assert config.bot_token == "ny-token"
+
+
+def test_telegram_config_reads_nyc_city_token_alias():
+    env = {
+        "TWAG_CITY": "nyc",
+        "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
+        "TELEGRAM_BOT_TOKEN": "legacy-token",
+    }
+
+    with patch.dict(os.environ, env, clear=True):
+        config = TelegramAgentConfig.from_env()
+
+    assert config.bot_token == "nyc-token"
 
 
 def test_bot_token_falls_back_to_legacy_var():

@@ -8,7 +8,9 @@ from html import unescape
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .city import CityConfig, active_city
 from .client import ClickHouseService
@@ -98,6 +100,18 @@ _SYSTEM_PROMPT_TEMPLATE = """
 You are {agent_name}, a data analyst for the {display_name}
 dataset loaded into ClickHouse.
 
+Current local context:
+- Current local datetime: {current_datetime}
+- Current local date: {current_date}
+- Local timezone: {time_zone}
+- Dataset event date range: {event_date_range}
+
+Interpret relative dates like "today", "tomorrow", "tonight", "this morning",
+"tomorrow morning", and weekdays relative to the current local date above. If a
+relative date falls inside the dataset range, query that concrete date instead
+of asking the user to clarify. Use event_date for dates and start_at/start_time
+for time-of-day filters like morning, afternoon, evening, or tonight.
+
 Use the {tool_name} tool whenever the user asks for facts, counts,
 rankings, filtering, recommendations, or analysis that depends on the data.
 Do not invent event data. Query the database first, then answer from the rows.
@@ -181,14 +195,39 @@ the final concise answer following the answer contract.
 """
 
 
-def build_system_prompt(city: CityConfig | None = None) -> str:
+def build_system_prompt(
+    city: CityConfig | None = None,
+    *,
+    now: datetime | None = None,
+) -> str:
     city = city or active_city()
+    local_now = current_city_datetime(city, now=now)
     return _SYSTEM_PROMPT_TEMPLATE.format(
         agent_name=city.agent_name,
         display_name=city.display_name,
         tool_name=city.tool_name,
         prefix=city.table_prefix,
+        current_datetime=local_now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        current_date=local_now.strftime("%A, %Y-%m-%d"),
+        time_zone=city.time_zone,
+        event_date_range=city.event_date_range,
     ).strip()
+
+
+def current_city_datetime(
+    city: CityConfig | None = None,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    city = city or active_city()
+    try:
+        tz = ZoneInfo(city.time_zone)
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+    value = now or datetime.now(tz)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(tz)
 
 
 def build_retry_after_planning_prompt(city: CityConfig | None = None) -> str:

@@ -7,21 +7,33 @@ ACTION="${1:-status}"
 case "$ACTION" in
   start|stop|restart|status)
     sudo systemctl "$ACTION" "twag-telegram-agent@$SERVICE_USER.service"
+    sudo systemctl "$ACTION" "twag-telegram-agent-boston@$SERVICE_USER.service"
     sudo systemctl "$ACTION" "twag-nimble@$SERVICE_USER.service"
     ;;
   logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
+      -u "twag-telegram-agent-boston@$SERVICE_USER.service" \
       -u "twag-nimble@$SERVICE_USER.service" -f
     ;;
   telegram-logs)
+    journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
+      -u "twag-telegram-agent-boston@$SERVICE_USER.service" -f
+    ;;
+  ny-telegram-logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" -f
+    ;;
+  boston-telegram-logs)
+    journalctl -u "twag-telegram-agent-boston@$SERVICE_USER.service" -f
     ;;
   nimble-logs)
     journalctl -u "twag-nimble@$SERVICE_USER.service" -f
     ;;
   diagnose)
-    echo "systemd unit:"
+    echo "NY systemd unit:"
     systemctl cat "twag-telegram-agent@$SERVICE_USER.service"
+    echo
+    echo "Boston systemd unit:"
+    systemctl cat "twag-telegram-agent-boston@$SERVICE_USER.service"
     echo
     echo "running processes:"
     ps -eo pid,ppid,user,lstart,command | grep -E 'twag-telegram-agent|twag telegram-agent' | grep -v grep || true
@@ -57,6 +69,8 @@ Usage:
   deploy/ubuntu/control.sh status
   deploy/ubuntu/control.sh logs
   deploy/ubuntu/control.sh telegram-logs
+  deploy/ubuntu/control.sh ny-telegram-logs
+  deploy/ubuntu/control.sh boston-telegram-logs
   deploy/ubuntu/control.sh nimble-logs
   deploy/ubuntu/control.sh diagnose
 

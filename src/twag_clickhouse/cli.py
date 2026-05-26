@@ -20,7 +20,7 @@ from .geojson_export import build_gallery, build_geojson
 from .thumbnails import build_thumbnails
 from .nytw import NytwDataset, inspect_nytw_dataset, load_nytw_dataset
 from .rendering import render_terminal_markdown
-from .senso import SensoConfig, SensoService, sync_senso_kb
+from .senso import SensoConfig, SensoService, senso_sync_overview, sync_senso_kb
 from .subconscious_agent import NytwSubconsciousAgent
 from .subconscious_deploy import build_run_payload, create_run, env_api_key, env_base_url
 from .telegram_agent import run_telegram_agent
@@ -102,6 +102,17 @@ def sync_senso(args: argparse.Namespace) -> int:
         chunk_overlap=args.chunk_overlap,
     )
     _print_json({"synced": counts})
+    return 0
+
+
+def sync_senso_log(args: argparse.Namespace) -> int:
+    _print_json(
+        senso_sync_overview(
+            _service(),
+            limit=args.limit,
+            item_limit=args.item_limit,
+        )
+    )
     return 0
 
 
@@ -351,6 +362,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overlapping characters between neighboring chunks",
     )
     sync_senso_parser.set_defaults(func=sync_senso)
+
+    sync_senso_log_parser = subparsers.add_parser(
+        "sync-senso-log",
+        help="Show recent Senso sync runs and document-level change summaries",
+    )
+    sync_senso_log_parser.add_argument(
+        "--limit",
+        type=int,
+        default=1,
+        help="Number of recent sync runs to show",
+    )
+    sync_senso_log_parser.add_argument(
+        "--item-limit",
+        type=int,
+        default=25,
+        help="Maximum inserted/updated/removed document rows to include",
+    )
+    sync_senso_log_parser.set_defaults(func=sync_senso_log)
 
     deploy_agent_parser = subparsers.add_parser(
         "deploy-nytw-agent",

@@ -56,7 +56,7 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-for unit in twag-telegram-agent@.service twag-nimble@.service; do
+for unit in twag-telegram-agent@.service twag-telegram-agent-boston@.service twag-nimble@.service; do
   sed "s#__APP_DIR__#$APP_DIR#g" "$APP_DIR/deploy/ubuntu/$unit" > "$tmpdir/$unit"
   sudo install -m 0644 "$tmpdir/$unit" "$SYSTEMD_DIR/$unit"
 done
@@ -66,18 +66,21 @@ sudo systemctl daemon-reload
 cat <<EOF
 
 Installed systemd units:
-  twag-telegram-agent@.service
+  twag-telegram-agent@.service (NYC)
+  twag-telegram-agent-boston@.service
   twag-nimble@.service
 
 Edit secrets:
   sudoedit $ENV_FILE
 
-Start both services:
+Start all services:
   sudo systemctl enable --now twag-telegram-agent@$SERVICE_USER.service
+  sudo systemctl enable --now twag-telegram-agent-boston@$SERVICE_USER.service
   sudo systemctl enable --now twag-nimble@$SERVICE_USER.service
 
 Logs:
   journalctl -u twag-telegram-agent@$SERVICE_USER.service -f
+  journalctl -u twag-telegram-agent-boston@$SERVICE_USER.service -f
   journalctl -u twag-nimble@$SERVICE_USER.service -f
 
 EOF

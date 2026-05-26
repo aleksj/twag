@@ -15,6 +15,7 @@ class CityConfig:
     agent_name: str
     tool_name: str
     event_date_range: str
+    time_zone: str
     vibe_line: str
     example_neighborhood: str
     example_date: str
@@ -37,6 +38,7 @@ NYC = CityConfig(
     agent_name="NYTechWeek ClickHouse Agent",
     tool_name="query_nytw_clickhouse",
     event_date_range="June 1-7, 2026",
+    time_zone="America/New_York",
     vibe_line=(
         "C'mon, this is NYC, not a vibes committee. I'm not here to crown the "
         "'best' event or tell you what to do with your afternoon. Give me criteria: "
@@ -68,7 +70,8 @@ BOSTON = CityConfig(
     dataset_path="data/bostontw-2026-for-agents",
     agent_name="BostonTechWeek ClickHouse Agent",
     tool_name="query_bostw_clickhouse",
-    event_date_range="May 26-31, 2026",
+    event_date_range="May 24-31, 2026",
+    time_zone="America/New_York",
     vibe_line=(
         "This is Boston — give me wicked specifics. I'm not here to crown the "
         "'best' event or tell you what to do with your afternoon. Give me criteria: "

@@ -18,10 +18,10 @@ of starting the process under the right environment — not code changes.
 
 The bot resolves its token in this order:
 
-1. `<CITY_SLUG_UPPER>_TELEGRAM_BOT_TOKEN` — e.g. `NYC_TELEGRAM_BOT_TOKEN` when
-   `TWAG_CITY=nyc`, `BOSTON_TELEGRAM_BOT_TOKEN` when `TWAG_CITY=boston`. **Use
-   this for any multi-city setup**: define both tokens in one env file and
-   each bot process picks the right one.
+1. City-specific token names. For NYC, both `NY_TELEGRAM_BOT_TOKEN` and
+   `NYC_TELEGRAM_BOT_TOKEN` are supported. For Boston, use
+   `BOSTON_TELEGRAM_BOT_TOKEN`. **Use this for any multi-city setup**: define
+   both tokens in one env file and each bot process picks the right one.
 2. `TELEGRAM_BOT_TOKEN` — legacy single-token fallback. Kept so existing
    single-city deployments don't need to change anything.
 
@@ -43,7 +43,8 @@ in your `.env` and just vary `TWAG_CITY` + the lock file per process:
 
 ```bash
 # .env (one file holds both)
-NYC_TELEGRAM_BOT_TOKEN=<nyc-token>
+NY_TELEGRAM_BOT_TOKEN=<nyc-token>
+# NYC_TELEGRAM_BOT_TOKEN=<nyc-token> also works
 BOSTON_TELEGRAM_BOT_TOKEN=<boston-token>
 ```
 
@@ -81,12 +82,13 @@ env file. Per-city Telegram bot tokens make this safe.
 
    ```bash
    # /etc/twag/twag.env — keep existing NYC values, add:
-   NYC_TELEGRAM_BOT_TOKEN=<nyc-bot-token>      # or leave the legacy TELEGRAM_BOT_TOKEN
+   NY_TELEGRAM_BOT_TOKEN=<nyc-bot-token>       # NYC_TELEGRAM_BOT_TOKEN also works
    BOSTON_TELEGRAM_BOT_TOKEN=<boston-bot-token>
    ```
 
    You can keep `TELEGRAM_BOT_TOKEN=...` for back-compat — the NYC process
-   will fall back to it if `NYC_TELEGRAM_BOT_TOKEN` is unset. No NYC change
+   will fall back to it if `NY_TELEGRAM_BOT_TOKEN` and
+   `NYC_TELEGRAM_BOT_TOKEN` are unset. No NYC change
    required to enable the Boston bot.
 
 2. Create a Boston copy of the unit file with `TWAG_CITY=boston` baked in:

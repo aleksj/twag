@@ -38,3 +38,19 @@ def test_sync_senso_parser_accepts_replace_and_chunk_options() -> None:
     assert args.batch_size == 100
     assert args.chunk_chars == 2000
     assert args.chunk_overlap == 250
+
+
+def test_sync_senso_log_parser_accepts_limits() -> None:
+    args = build_parser().parse_args(
+        [
+            "sync-senso-log",
+            "--limit",
+            "3",
+            "--item-limit",
+            "10",
+        ]
+    )
+
+    assert args.command == "sync-senso-log"
+    assert args.limit == 3
+    assert args.item_limit == 10
