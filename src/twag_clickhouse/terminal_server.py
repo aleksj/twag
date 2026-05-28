@@ -145,6 +145,24 @@ def terminal_asset(asset: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Unknown terminal asset")
 
 
+@app.get("/terminal/map/{session_id}/{map_id}.geojson")
+def terminal_result_map_geojson(session_id: str, map_id: str) -> dict[str, Any]:
+    session = _sessions.get(session_id)
+    if session is None or map_id not in session.map_results:
+        raise HTTPException(status_code=404, detail="Unknown map result")
+    result = session.map_results[map_id]
+    features = list(result.get("features") or [])
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "metadata": {
+            "city": result.get("city"),
+            "source": "terminal-search-results",
+            "count": len(features),
+        },
+    }
+
+
 @app.get("/terminal/map/{session_id}/{map_id}", response_class=HTMLResponse)
 def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
     session = _sessions.get(session_id)
@@ -195,24 +213,6 @@ def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
 </html>
 """
     )
-
-
-@app.get("/terminal/map/{session_id}/{map_id}.geojson")
-def terminal_result_map_geojson(session_id: str, map_id: str) -> dict[str, Any]:
-    session = _sessions.get(session_id)
-    if session is None or map_id not in session.map_results:
-        raise HTTPException(status_code=404, detail="Unknown map result")
-    result = session.map_results[map_id]
-    features = list(result.get("features") or [])
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-        "metadata": {
-            "city": result.get("city"),
-            "source": "terminal-search-results",
-            "count": len(features),
-        },
-    }
 
 
 @app.get("/health")

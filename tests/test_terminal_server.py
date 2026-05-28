@@ -4,6 +4,7 @@ from twag_clickhouse.terminal_server import (
     SessionCreateRequest,
     TerminalSession,
     _answer_in_thread,
+    app,
     cities,
     create_session,
     terminal_token_is_valid,
@@ -159,6 +160,19 @@ def test_answer_in_thread_adds_map_link_for_mapped_event_results(monkeypatch, tm
     geojson = terminal_result_map_geojson(session.session_id, map_id)
     assert geojson["metadata"]["count"] == 1
     assert geojson["features"][0]["properties"]["event_id"] == "mapped-1"
+
+
+def test_terminal_result_map_geojson_route_is_not_shadowed() -> None:
+    path = "/terminal/map/route-session/map-result.geojson"
+    matches = [
+        route
+        for route in app.routes
+        if getattr(route, "path_regex", None)
+        and route.path_regex.match(path)  # type: ignore[attr-defined]
+    ]
+
+    assert matches
+    assert matches[0].path == "/terminal/map/{session_id}/{map_id}.geojson"
 
 
 def test_answer_in_thread_does_not_create_agent_for_local_commands(monkeypatch) -> None:
