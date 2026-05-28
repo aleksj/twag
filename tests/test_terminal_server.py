@@ -12,6 +12,7 @@ from twag_clickhouse.terminal_server import (
     root,
     terminal_asset,
     terminal_index,
+    terminal_result_map_geojson,
 )
 
 
@@ -90,7 +91,7 @@ def test_answer_in_thread_emits_status_and_final_events(monkeypatch) -> None:
     assert typed_events[-1]["text"] == "answered how many events in soho?"
 
 
-def test_answer_in_thread_tracks_more_with_contextual_map_link(monkeypatch) -> None:
+def test_answer_in_thread_tracks_more_without_unbacked_map_link(monkeypatch) -> None:
     class Agent:
         def __init__(self) -> None:
             self.calls = []
@@ -108,18 +109,56 @@ def test_answer_in_thread_tracks_more_with_contextual_map_link(monkeypatch) -> N
     _answer_in_thread(session, "list events involving running", first_events.append)
     _answer_in_thread(session, "more", more_events.append)
 
-    expected_map = (
-        "[View on the map]"
-        "(https://example.test/map/events_map_nyc.html#date=2026-06-02)"
-    )
     first_typed = [event for event in first_events if event is not None]
     more_typed = [event for event in more_events if event is not None]
-    assert first_typed[-1]["text"] == f"list events involving running @ 0\n\n{expected_map}"
-    assert more_typed[-1]["text"] == f"list events involving running @ 25\n\n{expected_map}"
+    assert first_typed[-1]["text"] == "list events involving running @ 0"
+    assert more_typed[-1]["text"] == "list events involving running @ 25"
     assert agent.calls == [
         ("list events involving running", 0),
         ("list events involving running", 25),
     ]
+
+
+def test_answer_in_thread_adds_map_link_for_mapped_event_results(monkeypatch, tmp_path) -> None:
+    class Agent:
+        def ask(self, question, **_kwargs):
+            self.last_event_map_rows = [{"event_id": "mapped-1"}]
+            return f"answered {question}"
+
+    (tmp_path / "nyc.geojson").write_text(
+        """
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [-73.99, 40.73]},
+      "properties": {
+        "event_id": "mapped-1",
+        "event_date": "2026-06-01",
+        "title": "Mapped event"
+      }
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("twag_clickhouse.terminal_server.DOCS_DIR", tmp_path)
+    session = TerminalSession(session_id="mapped-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "list AI events in SoHo", events.append)
+
+    typed_events = [event for event in events if event is not None]
+    final_text = typed_events[-1]["text"]
+    assert "View on map" in final_text
+    assert "/terminal/map/mapped-session/" in final_text
+
+    map_id = next(iter(session.map_results))
+    geojson = terminal_result_map_geojson(session.session_id, map_id)
+    assert geojson["metadata"]["count"] == 1
+    assert geojson["features"][0]["properties"]["event_id"] == "mapped-1"
 
 
 def test_answer_in_thread_does_not_create_agent_for_local_commands(monkeypatch) -> None:

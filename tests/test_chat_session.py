@@ -96,7 +96,7 @@ def test_answer_session_message_tracks_more_when_answer_has_more_hint() -> None:
     )
 
 
-def test_answer_session_message_appends_event_map_links_from_plan_url_pattern() -> None:
+def test_answer_session_message_leaves_map_linking_to_terminal_handoff() -> None:
     class Agent:
         def ask(self, question, **kwargs):
             return f"{question} @ {kwargs.get('event_offset', 0)}"
@@ -116,12 +116,8 @@ def test_answer_session_message_appends_event_map_links_from_plan_url_pattern() 
         )
         more = answer_session_message(Agent(), states, "local", "more")
 
-    expected_map = (
-        "[View on the map]"
-        "(https://natea.github.io/twag/events_map_boston.html#date=2026-05-27)"
-    )
-    assert answer == f"top 3 AI events on May 27 @ 0\n\n{expected_map}"
-    assert more == f"top 3 AI events on May 27 @ 3\n\n{expected_map}"
+    assert answer == "top 3 AI events on May 27 @ 0"
+    assert more == "top 3 AI events on May 27 @ 3"
 
 
 def test_answer_session_message_hides_agent_configuration_errors() -> None:

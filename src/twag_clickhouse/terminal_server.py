@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
 import os
 import pathlib
@@ -45,6 +47,8 @@ DEFAULT_TERMINAL_HOST = "localhost"
 DEFAULT_TERMINAL_PORT = 8765
 TERMINAL_TOKEN_HEADER = "x-twag-terminal-token"
 TERMINAL_WEB_DIR = pathlib.Path(__file__).with_name("terminal_web")
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+DOCS_DIR = REPO_ROOT / "docs"
 LOGGER = logging.getLogger(__name__)
 INTERNAL_TERMINAL_ERROR_REPLY = (
     "TWAG hit an internal error while answering. Please try again later."
@@ -83,6 +87,7 @@ class TerminalSession:
     city: str
     state: ChatState = field(default_factory=ChatState)
     agent: NytwSubconsciousAgent | None = None
+    map_results: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class LazySessionAgent:
@@ -130,10 +135,84 @@ def terminal_index() -> FileResponse:
 
 @app.get("/terminal/{asset}", include_in_schema=False)
 def terminal_asset(asset: str) -> FileResponse:
-    allowed_assets = {"app.js", "styles.css"}
-    if asset not in allowed_assets:
+    terminal_assets = {"app.js", "styles.css"}
+    map_assets = {"events_map.js", "events_map.css", "config.js"}
+    if asset in terminal_assets:
+        return FileResponse(TERMINAL_WEB_DIR / asset)
+    if asset in map_assets:
+        return FileResponse(DOCS_DIR / asset)
+    else:
         raise HTTPException(status_code=404, detail="Unknown terminal asset")
-    return FileResponse(TERMINAL_WEB_DIR / asset)
+
+
+@app.get("/terminal/map/{session_id}/{map_id}", response_class=HTMLResponse)
+def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
+    session = _sessions.get(session_id)
+    if session is None or map_id not in session.map_results:
+        raise HTTPException(status_code=404, detail="Unknown map result")
+    result = session.map_results[map_id]
+    city = load_city(str(result["city"]))
+    dates = list(result.get("dates") or [city.default_map_date])
+    title = f"{city.short_name} search results"
+    config = {
+        "token": "__TOKEN__",
+        "centerLat": city.map_center_lat,
+        "centerLon": city.map_center_lon,
+        "zoom": city.map_zoom,
+        "geojsonUrl": f"{map_id}.geojson",
+        "dateRange": dates,
+        "defaultDate": dates[0],
+    }
+    config_json = json.dumps(config).replace('"__TOKEN__"', "window.TWAG_MAPBOX_TOKEN")
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>{html.escape(title)}</title>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" rel="stylesheet">
+  <link href="../../events_map.css" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>{html.escape(title)}</h1>
+    <div id="count">Loading...</div>
+    <div class="credit">Filtered from terminal search results</div>
+  </header>
+  <nav class="tab-nav">
+    <a href="../.." class="active">Terminal</a>
+  </nav>
+  <div id="date-picker"></div>
+  <div id="map"></div>
+  <div id="error"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
+  <script src="../../config.js"></script>
+  <script src="../../events_map.js"></script>
+  <script>initEventMap({config_json});</script>
+</body>
+</html>
+"""
+    )
+
+
+@app.get("/terminal/map/{session_id}/{map_id}.geojson")
+def terminal_result_map_geojson(session_id: str, map_id: str) -> dict[str, Any]:
+    session = _sessions.get(session_id)
+    if session is None or map_id not in session.map_results:
+        raise HTTPException(status_code=404, detail="Unknown map result")
+    result = session.map_results[map_id]
+    features = list(result.get("features") or [])
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "metadata": {
+            "city": result.get("city"),
+            "source": "terminal-search-results",
+            "count": len(features),
+        },
+    }
 
 
 @app.get("/health")
@@ -203,6 +282,73 @@ def ready_event(session: TerminalSession) -> dict[str, Any]:
         "verbose": session.state.verbose,
         "greeting": greeting,
     }
+
+
+def _city_geojson(city_slug: str) -> dict[str, Any]:
+    city = load_city(city_slug)
+    path = DOCS_DIR / f"{city.slug}.geojson"
+    if not path.is_file():
+        return {"type": "FeatureCollection", "features": []}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _features_for_event_ids(city_slug: str, event_ids: list[str]) -> list[dict[str, Any]]:
+    wanted = set(event_ids)
+    if not wanted:
+        return []
+    geojson = _city_geojson(city_slug)
+    features = []
+    for feature in geojson.get("features") or []:
+        event_id = str((feature.get("properties") or {}).get("event_id") or "")
+        if event_id in wanted:
+            features.append(feature)
+    order = {event_id: index for index, event_id in enumerate(event_ids)}
+    features.sort(
+        key=lambda feature: order.get(
+            str((feature.get("properties") or {}).get("event_id") or ""),
+            len(order),
+        )
+    )
+    return features
+
+
+def _terminal_map_link(session: TerminalSession) -> str:
+    rows = list(getattr(session.agent, "last_event_map_rows", []) or [])
+    event_ids = []
+    seen = set()
+    for row in rows:
+        event_id = str(row.get("event_id") or "").strip()
+        if event_id and event_id not in seen:
+            event_ids.append(event_id)
+            seen.add(event_id)
+
+    features = _features_for_event_ids(session.city, event_ids)
+    if not features:
+        return ""
+
+    map_id = uuid.uuid4().hex
+    dates = sorted(
+        {
+            str((feature.get("properties") or {}).get("event_date") or "")
+            for feature in features
+            if (feature.get("properties") or {}).get("event_date")
+        }
+    )
+    session.map_results[map_id] = {
+        "city": session.city,
+        "created_at": time.time(),
+        "event_ids": event_ids,
+        "features": features,
+        "dates": dates or [load_city(session.city).default_map_date],
+    }
+    if len(session.map_results) > 20:
+        oldest = sorted(
+            session.map_results,
+            key=lambda key: float(session.map_results[key].get("created_at") or 0),
+        )
+        for old_key in oldest[:-20]:
+            session.map_results.pop(old_key, None)
+    return f"\n\n[View on map](/terminal/map/{session.session_id}/{map_id})"
 
 
 @app.websocket("/sessions/{session_id}")
@@ -298,6 +444,7 @@ def _answer_in_thread(
     emit: Callable[[dict[str, Any]], None],
 ) -> None:
     state = session.state
+    _sessions[session.session_id] = session
     _states[session.session_id] = state
     usage = TokenUsageAccumulator()
     error: str | None = None
@@ -342,6 +489,7 @@ def _answer_in_thread(
                     raw_stream_callback=raw_stream_callback,
                     token_usage_callback=usage.add,
                 )
+                answer += _terminal_map_link(session)
         emit(
             {
                 "type": "final",

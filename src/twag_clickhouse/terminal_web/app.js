@@ -69,7 +69,9 @@ function escapeHtml(text) {
 
 function safeUrl(url) {
   try {
-    const parsed = new URL(url);
+    const value = String(url || '').trim();
+    const routedUrl = value.startsWith('/terminal/') ? appPath(value) : value;
+    const parsed = new URL(routedUrl, window.location.origin);
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
       return parsed.href;
     }
@@ -114,7 +116,7 @@ function markdownToHtml(text) {
       }
       return stash(`<code>${escapeHtml(code)}</code>`);
     })
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, label, url) => stash(anchorHtml(url, label)));
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]+)\)/g, (_match, label, url) => stash(anchorHtml(url, label)));
 
   let html = escapeHtml(protectedText)
     .replace(/\*\*([^*\n][\s\S]*?[^*\n])\*\*/g, '<strong>$1</strong>')

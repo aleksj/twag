@@ -390,7 +390,7 @@ def answer_session_message(
             )
         except Exception as exc:
             return agent_error_reply(exc)
-        return answer + event_answer_map_link(text, state, presentation=presentation)
+        return answer
 
     if progress:
         progress(f"Handing the request to the {active_city().short_name} search pipeline.")
@@ -405,4 +405,4 @@ def answer_session_message(
         )
     except Exception as exc:
         return agent_error_reply(exc)
-    return answer + event_answer_map_link(text, state, presentation=presentation)
+    return answer

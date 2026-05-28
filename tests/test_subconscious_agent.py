@@ -136,6 +136,8 @@ def test_build_keyword_event_query_is_limited_and_targets_nytw_events() -> None:
     sql = build_keyword_event_query("top 3 AI agent orchestration events")
 
     assert "FROM nytw_events" in sql
+    assert "event_id" in sql
+    assert "count() OVER () AS total_matches" in sql
     assert "LIMIT 3" in sql
     assert "orchestration" in sql
     assert "neighborhood ILIKE" in sql
@@ -252,6 +254,33 @@ def test_format_event_rows_adds_more_hint_only_when_extra_row_exists() -> None:
     assert "Send `more` for the next page" not in output_without_extra
 
 
+def test_format_event_rows_summarizes_total_matches_without_expanding_page() -> None:
+    rows = [
+        {
+            "title": f"Event {index}",
+            "event_date": "2026-06-06",
+            "start_time": "9:00am ET",
+            "neighborhood": "Upper West Side",
+            "description_excerpt": "A focused event.",
+            "rsvp_url": f"https://partiful.com/e/{index}",
+            "total_matches": 68,
+        }
+        for index in range(1, 4)
+    ]
+
+    output = format_event_rows(
+        {"ok": True, "rows": rows},
+        offset=25,
+        page_size=2,
+        more_hint=True,
+    )
+
+    assert output.startswith("Showing 26-27 of 68 matching events.")
+    assert "Event 1" in output
+    assert "Event 2" in output
+    assert "Event 3" not in output
+
+
 class RecordingClickHouse:
     def __init__(self) -> None:
         self.sql: str | None = None
@@ -261,6 +290,7 @@ class RecordingClickHouse:
         return [
             {
                 "title": f"Upper West Side Founder Breakfast {index}",
+                "event_id": f"event-{index}",
                 "event_date": "2026-06-03",
                 "start_time": "9:00am ET",
                 "end_time": "",
@@ -268,6 +298,7 @@ class RecordingClickHouse:
                 "venue_name": "Cafe",
                 "description_excerpt": "Founders and operators meet over breakfast.",
                 "rsvp_url": f"https://partiful.com/e/uws-{index}",
+                "total_matches": "72",
             }
             for index in range(1, 28)
         ]
@@ -285,9 +316,14 @@ def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
     assert clickhouse.sql is not None
     assert "neighborhood ILIKE" in clickhouse.sql
     assert "LIMIT 26" in clickhouse.sql
+    assert "count() OVER () AS total_matches" in clickhouse.sql
+    assert "Showing 1-25 of 72 matching events." in answer
     assert "Upper West Side Founder Breakfast 1" in answer
     assert "Upper West Side Founder Breakfast 26" not in answer
     assert "Send `more` for the next page" in answer
+    assert [row["event_id"] for row in agent.last_event_map_rows] == [
+        f"event-{index}" for index in range(1, 26)
+    ]
 
 
 def test_agent_executes_embedded_tool_call_in_thinking_content() -> None:

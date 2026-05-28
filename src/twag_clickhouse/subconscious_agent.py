@@ -660,6 +660,7 @@ WITH
   {terms_array} AS query_terms,
   {phrase_sql} AS query_phrase
 SELECT
+  event_id,
   title,
   event_date,
   start_time,
@@ -675,7 +676,8 @@ SELECT
     ({score}) +
     term_overlap * 4 +
     multiIf(query_phrase != '' AND positionCaseInsensitive(retrieval_text, query_phrase) > 0, 12, 0)
-  ) AS relevance_score
+  ) AS relevance_score,
+  count() OVER () AS total_matches
 FROM
 (
 SELECT
@@ -724,6 +726,18 @@ def compact_text(value: Any, *, max_chars: int = 130) -> str:
     return sentence[: max_chars - 1].rstrip() + "..."
 
 
+def _total_matches_from_rows(rows: list[dict[str, Any]]) -> int | None:
+    for row in rows:
+        value = row.get("total_matches")
+        if value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def format_event_rows(
     result: dict[str, Any],
     *,
@@ -742,6 +756,13 @@ def format_event_rows(
     display_rows = rows[:page_size] if page_size is not None else rows
 
     lines = []
+    total_matches = _total_matches_from_rows(rows)
+    if total_matches is not None:
+        start = offset + 1
+        end = offset + len(display_rows)
+        noun = "event" if total_matches == 1 else "events"
+        lines.append(f"Showing {start}-{end} of {total_matches} matching {noun}.")
+
     for row in display_rows:
         title = row.get("title") or "Untitled event"
         date = row.get("event_date") or "date TBD"
@@ -775,6 +796,7 @@ class NytwSubconsciousAgent:
         self.clickhouse = clickhouse
         self.subconscious = subconscious
         self._clickhouse_lock = threading.Lock()
+        self.last_event_map_rows: list[dict[str, Any]] = []
 
     @classmethod
     def from_env(cls) -> "NytwSubconsciousAgent":
@@ -793,6 +815,7 @@ class NytwSubconsciousAgent:
         token_usage_callback: TokenUsageCallback | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> str:
+        self.last_event_map_rows = []
         city = active_city()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": build_system_prompt(city)},
@@ -817,6 +840,8 @@ class NytwSubconsciousAgent:
                     offset=event_offset,
                 )
             )
+            if result.get("ok"):
+                self.last_event_map_rows = list((result.get("rows") or [])[:page_size])
             if progress_callback:
                 if result.get("ok"):
                     row_count = int(result.get("row_count") or len(result.get("rows") or []))
