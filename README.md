@@ -12,7 +12,7 @@ Sponsored by [Data.Flowers](https://data.flowers/).
 
 ## Credits
 
-- **[Atin Woodard from Stage11](https://github.com/stage11)** started the agent-friendly NY Tech Week database.
+- **[Atin Woodard from Stage11](https://github.com/Stage-11-Agentics/)** started the agent-friendly NY Tech Week database.
 - **[Aleks Jakulin from Data.Flowers](https://github.com/aleksj)** started on the end-user product, wiring ClickHouse, Nimble, Telegram, deployment, and production hardening pieces together.
 - **[Nate Aune](https://github.com/natea)** ported the experience to Boston, rebuilt the static map/gallery navigation, and pushed the multi-city direction.
 

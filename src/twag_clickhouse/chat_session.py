@@ -161,7 +161,7 @@ def help_reply(*, presentation: ChatPresentation = DEFAULT_PRESENTATION) -> str:
         "RSVP status, or time.\n\n"
         "Built by [Aleks](https://github.com/aleksj) and "
         "[Nate Aune](https://github.com/natea), with contributions from "
-        "[Atin](https://github.com/AtinAtinAtin)."
+        "[Stage11](https://github.com/Stage-11-Agentics/)."
     )
 
 
