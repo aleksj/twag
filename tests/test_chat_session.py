@@ -44,6 +44,47 @@ def test_answer_session_message_tracks_more_per_session() -> None:
     assert answer_session_message(Agent(), states, "local", "more") == "top 3 AI events @ 3"
 
 
+def test_answer_session_message_tracks_more_for_topic_event_queries() -> None:
+    class Agent:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def ask(self, question, **kwargs):
+            self.calls.append((question, kwargs.get("event_offset", 0)))
+            return f"{question} @ {kwargs.get('event_offset', 0)}"
+
+    states = {"local": ChatState()}
+    agent = Agent()
+
+    assert (
+        answer_session_message(agent, states, "local", "AI personalization events")
+        == "AI personalization events @ 0"
+    )
+    assert (
+        answer_session_message(agent, states, "local", "more")
+        == "AI personalization events @ 25"
+    )
+    assert agent.calls == [
+        ("AI personalization events", 0),
+        ("AI personalization events", 25),
+    ]
+
+
+def test_answer_session_message_tracks_more_when_answer_has_more_hint() -> None:
+    class Agent:
+        def ask(self, question, **kwargs):
+            return (
+                f"{question} @ {kwargs.get('event_offset', 0)}\n\n"
+                "More results are available. Send `more` for the next page."
+            )
+
+    states = {"local": ChatState()}
+
+    answer_session_message(Agent(), states, "local", "AI personalization")
+
+    assert states["local"].conversation.last_event_question == "AI personalization"
+
+
 def test_answer_session_message_appends_event_map_links_from_plan_url_pattern() -> None:
     class Agent:
         def ask(self, question, **kwargs):

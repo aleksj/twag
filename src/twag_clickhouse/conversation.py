@@ -61,7 +61,11 @@ class AgentConversation:
             token_usage_callback=token_usage_callback,
             progress_callback=progress_callback,
         )
-        if likely_event_list_question(text):
+        if likely_event_list_question(text) or _looks_like_pageable_event_answer(answer):
             self.last_event_question = text
             self.last_event_offset = 0
         return answer
+
+
+def _looks_like_pageable_event_answer(answer: str) -> bool:
+    return "More results are available. Send `more`" in answer

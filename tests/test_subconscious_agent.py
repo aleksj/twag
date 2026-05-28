@@ -188,6 +188,8 @@ def test_likely_nytw_data_question_detects_event_data_requests() -> None:
 def test_likely_event_list_question_requires_event_search_intent() -> None:
     assert likely_event_list_question("list events involving running")
     assert likely_event_list_question("top 3 AI events")
+    assert likely_event_list_question("AI personalization events")
+    assert likely_event_list_question("events about agent orchestration")
     assert likely_event_list_question("events in upper west side?")
     assert not likely_event_list_question("What is our refund policy for events?")
 

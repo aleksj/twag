@@ -378,9 +378,11 @@ async function createSession() {
   return response.json();
 }
 
-function connect(session) {
+function connect(session, options = {}) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const socket = new WebSocket(`${protocol}//${window.location.host}${appPath(session.websocket)}`);
+  socket.twagResumeExisting = Boolean(options.resumeExisting);
+  socket.twagReceivedReady = false;
   state.socket = socket;
 
   socket.addEventListener('open', () => {
@@ -392,6 +394,7 @@ function connect(session) {
   socket.addEventListener('message', (message) => {
     const event = JSON.parse(message.data);
     if (event.type === 'ready') {
+      socket.twagReceivedReady = true;
       state.sessionId = event.session_id;
       setCity(event.city);
       appendStatus(`Ready. Session: ${event.session_id}`);
@@ -443,6 +446,12 @@ function connect(session) {
 
   socket.addEventListener('close', () => {
     if (state.socket !== socket) return;
+    if (socket.twagResumeExisting && !socket.twagReceivedReady) {
+      state.sessionId = '';
+      appendStatus('Previous session expired. Starting a new session.');
+      reconnect({ newSession: true });
+      return;
+    }
     setConnection('closed');
     appendStatus('Disconnected. Use reconnect, then send again.');
   });
@@ -467,13 +476,25 @@ commandButtons.forEach((button) => {
   });
 });
 
-async function reconnect() {
+async function reconnect(options = {}) {
   try {
     if (state.socket && state.socket.readyState !== WebSocket.CLOSED) {
       state.socket.close();
     }
     setConnection('connecting');
-    appendStatus('Reconnecting...');
+    if (state.sessionId && !options.newSession) {
+      appendStatus('Reconnecting to the current session...');
+      connect(
+        {
+          session_id: state.sessionId,
+          city: state.city,
+          websocket: `/sessions/${state.sessionId}`,
+        },
+        { resumeExisting: true },
+      );
+      return;
+    }
+    appendStatus('Starting a new session...');
     const session = await createSession();
     setCity(session.city);
     connect(session);
