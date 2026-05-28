@@ -20,7 +20,7 @@ Sponsored by [Data.Flowers](https://data.flowers/).
 
 |  | NY Tech Week | Boston Tech Week |
 | --- | --- | --- |
-| Bot: terminal | [Open terminal](https://data.flowers/tw/terminal?city=nyc) | [Open terminal](https://data.flowers/tw/terminal?city=boston) |
+| Bot: terminal | [Open terminal](https://data.flowers/tw/?city=nyc) | [Open terminal](https://data.flowers/tw/?city=boston) |
 | Bot: Telegram | [@Twagbot](https://t.me/Twagbot) | [@TwagBostonBot](https://t.me/TwagBostonBot) |
 | Bot: Telegram QR | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> |
 | Gallery | [Browse gallery](https://natea.github.io/twag/events_gallery_nyc.html) | [Browse gallery](https://natea.github.io/twag/events_gallery_boston.html) |
