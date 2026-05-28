@@ -14,6 +14,7 @@ const state = {
   draftNode: null,
   operatorToken: '',
   greetingShown: false,
+  lastStatusLine: '',
 };
 
 const appBasePath = new URL('.', window.location.href).pathname;
@@ -38,6 +39,27 @@ function setCity(city) {
   cityState.textContent = `city: ${state.city || '--'}`;
 }
 
+function statusIsNearBottom() {
+  return statusText.scrollHeight - statusText.scrollTop - statusText.clientHeight < 32;
+}
+
+function appendStatus(text) {
+  const cleanText = String(text || '').trim();
+  if (!cleanText || cleanText === state.lastStatusLine) return;
+
+  const shouldScroll = statusIsNearBottom();
+  const time = new Intl.DateTimeFormat([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date());
+  const line = `[${time}] ${cleanText.replace(/\s+/g, ' ')}`;
+  const lines = `${statusText.textContent || ''}${line}\n`.split('\n');
+  statusText.textContent = lines.slice(-120).join('\n');
+  state.lastStatusLine = cleanText;
+  if (shouldScroll) statusText.scrollTop = statusText.scrollHeight;
+}
+
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = String(text || '');
@@ -60,6 +82,18 @@ function anchorHtml(url, label = url) {
   const href = safeUrl(url);
   if (!href) return escapeHtml(label);
   return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+}
+
+function anchorNode(url, label = url) {
+  const href = safeUrl(url);
+  if (!href) return document.createTextNode(label);
+
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.target = '_blank';
+  anchor.rel = 'noreferrer';
+  anchor.textContent = label;
+  return anchor;
 }
 
 function commandLinkHtml(command, label = command) {
@@ -102,6 +136,45 @@ function markdownToHtml(text) {
   }
 
   return html;
+}
+
+function linkifyTextNode(node) {
+  const text = node.nodeValue || '';
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<]+)/g;
+  let lastIndex = 0;
+  let match;
+  const fragment = document.createDocumentFragment();
+
+  while ((match = pattern.exec(text)) !== null) {
+    fragment.append(document.createTextNode(text.slice(lastIndex, match.index)));
+
+    if (match[1] && match[2]) {
+      fragment.append(anchorNode(match[2], match[1]));
+    } else {
+      const bareMatch = match[3] || '';
+      const trailing = bareMatch.match(/[),.;:!?]+$/)?.[0] || '';
+      const url = trailing ? bareMatch.slice(0, -trailing.length) : bareMatch;
+      fragment.append(anchorNode(url));
+      if (trailing) fragment.append(document.createTextNode(trailing));
+    }
+
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex === 0) return;
+  fragment.append(document.createTextNode(text.slice(lastIndex)));
+  node.replaceWith(fragment);
+}
+
+function linkifyContentInPlace(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) {
+    textNodes.push(walker.currentNode);
+  }
+  for (const node of textNodes) {
+    linkifyTextNode(node);
+  }
 }
 
 function clipboardTextForNode(node) {
@@ -202,7 +275,11 @@ function setDraft(text, mode) {
   const next = mode === 'append' ? previous + text : text;
   if (next === previous) return;
   content.dataset.raw = next;
-  content.innerHTML = markdownToHtml(next);
+  if (next.startsWith(previous)) {
+    content.append(document.createTextNode(next.slice(previous.length)));
+  } else {
+    content.textContent = next;
+  }
   if (shouldScroll) scrollTranscriptToBottom();
 }
 
@@ -220,7 +297,7 @@ function socketIsOpen() {
 function send(payload) {
   if (!socketIsOpen()) {
     setConnection('closed');
-    statusText.textContent = 'Disconnected. Use reconnect, then send again.';
+    appendStatus('Disconnected. Use reconnect, then send again.');
     appendMessage('system', 'Disconnected. Press reconnect, then send again.');
     promptInput.focus();
     return false;
@@ -230,7 +307,7 @@ function send(payload) {
     return true;
   } catch {
     setConnection('closed');
-    statusText.textContent = 'Disconnected. Use reconnect, then send again.';
+    appendStatus('Disconnected. Use reconnect, then send again.');
     appendMessage('system', 'Disconnected. Press reconnect, then send again.');
     promptInput.focus();
     return false;
@@ -259,7 +336,7 @@ function submitPromptText(rawText) {
   if (!send({ type: 'message', text })) return false;
   promptInput.value = '';
   appendMessage('user', text, '', { forceScroll: true });
-  statusText.textContent = 'Sent. Waiting for TWAG...';
+  appendStatus('Sent. Waiting for TWAG...');
   return true;
 }
 
@@ -308,7 +385,7 @@ function connect(session) {
 
   socket.addEventListener('open', () => {
     setConnection('connected');
-    statusText.textContent = 'Connected. Ask a Tech Week question.';
+    appendStatus('Connected. Ask a Tech Week question.');
     promptInput.focus();
   });
 
@@ -317,17 +394,17 @@ function connect(session) {
     if (event.type === 'ready') {
       state.sessionId = event.session_id;
       setCity(event.city);
-      statusText.textContent = `Ready.\nSession: ${event.session_id}`;
+      appendStatus(`Ready. Session: ${event.session_id}`);
       if (event.greeting && !state.greetingShown) {
         appendMessage('twag', event.greeting, '', { forceScroll: true });
         state.greetingShown = true;
       }
     } else if (event.type === 'city') {
       setCity(event.city);
-      statusText.textContent = event.message;
+      appendStatus(event.message);
       appendMessage('system', event.message);
     } else if (event.type === 'status') {
-      statusText.textContent = event.text || event.step || '';
+      appendStatus(event.step || event.text || '');
     } else if (event.type === 'delta') {
       setDraft(event.text || '', event.mode);
     } else if (event.type === 'final') {
@@ -335,20 +412,31 @@ function connect(session) {
       if (state.draftNode) {
         const row = state.draftNode;
         const content = row.querySelector('.content');
+        const raw = event.text || content.dataset.raw || '';
+        const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
         row.classList.remove('draft');
-        content.dataset.raw = event.text || content.dataset.raw || '';
-        content.innerHTML = markdownToHtml(content.dataset.raw);
+        content.dataset.raw = raw;
+        const currentText = content.textContent || '';
+        if (raw.startsWith(currentText)) {
+          content.append(document.createTextNode(raw.slice(currentText.length)));
+          linkifyContentInPlace(content);
+        } else if (currentText !== raw) {
+          content.innerHTML = markdownToHtml(raw);
+        } else {
+          linkifyContentInPlace(content);
+        }
         state.draftNode = null;
         if (shouldScroll) scrollTranscriptToBottom();
+        else transcript.scrollTop = transcript.scrollHeight - beforeBottom;
       } else {
         appendMessage('twag', event.text || '', '', { forceScroll: shouldScroll });
       }
       const tokenLine = event.usage?.total_tokens ? `\nTokens: ${event.usage.total_tokens}` : '';
-      statusText.textContent = `Done.\nDuration: ${event.duration_ms || 0}ms${tokenLine}`;
+      appendStatus(`Done. Duration: ${event.duration_ms || 0}ms${tokenLine}`);
     } else if (event.type === 'error') {
       clearDraft();
       setConnection('error');
-      statusText.textContent = event.error || 'Unknown error.';
+      appendStatus(event.error || 'Unknown error.');
       appendMessage('system', `Error: ${event.error || 'unknown error'}`);
     }
   });
@@ -356,13 +444,13 @@ function connect(session) {
   socket.addEventListener('close', () => {
     if (state.socket !== socket) return;
     setConnection('closed');
-    statusText.textContent = 'Disconnected. Use reconnect, then send again.';
+    appendStatus('Disconnected. Use reconnect, then send again.');
   });
 
   socket.addEventListener('error', () => {
     if (state.socket !== socket) return;
     setConnection('error');
-    statusText.textContent = 'Connection error. Use reconnect, then send again.';
+    appendStatus('Connection error. Use reconnect, then send again.');
   });
 }
 
@@ -385,13 +473,13 @@ async function reconnect() {
       state.socket.close();
     }
     setConnection('connecting');
-    statusText.textContent = 'Reconnecting...';
+    appendStatus('Reconnecting...');
     const session = await createSession();
     setCity(session.city);
     connect(session);
   } catch (error) {
     setConnection('error');
-    statusText.textContent = error.message || String(error);
+    appendStatus(error.message || String(error));
     appendMessage('system', 'Could not reconnect. Try again.');
   }
 }
@@ -412,17 +500,19 @@ connectionState.addEventListener('keydown', (event) => {
 
 window.addEventListener('offline', () => {
   setConnection('closed');
-  statusText.textContent = 'Disconnected. Use reconnect, then send again.';
+  appendStatus('Disconnected. Use reconnect, then send again.');
 });
 
 async function main() {
   try {
     setConnection('booting');
+    statusText.textContent = '';
+    appendStatus('Starting session...');
     state.operatorToken = readOperatorToken();
     await reconnect();
   } catch (error) {
     setConnection('error');
-    statusText.textContent = error.message || String(error);
+    appendStatus(error.message || String(error));
     appendMessage('system', 'Could not start a browser terminal session.');
   }
 }
