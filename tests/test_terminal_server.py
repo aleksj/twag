@@ -69,7 +69,9 @@ def test_terminal_operator_token_validates_when_configured(monkeypatch) -> None:
     assert terminal_token_is_valid("secret-token") is True
 
 
-def test_answer_in_thread_emits_status_and_final_events() -> None:
+def test_answer_in_thread_emits_status_and_final_events(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
     class Agent:
         def ask(self, question, **kwargs):
             kwargs["progress_callback"]("Fake search step.")
@@ -120,7 +122,9 @@ def test_answer_in_thread_tracks_more_with_contextual_map_link(monkeypatch) -> N
     ]
 
 
-def test_answer_in_thread_does_not_create_agent_for_local_commands() -> None:
+def test_answer_in_thread_does_not_create_agent_for_local_commands(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
     session = TerminalSession(session_id="command-session", city="nyc")
     events = []
 

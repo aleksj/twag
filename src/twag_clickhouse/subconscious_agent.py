@@ -80,10 +80,6 @@ EVENT_LOCATION_SEARCH_PATTERN = re.compile(
     r"\bevents?\b.*\b(in|near|around|at)\b|\b(in|near|around|at)\b.*\bevents?\b",
     re.IGNORECASE,
 )
-NON_SEARCH_EVENT_TOPIC_PATTERN = re.compile(
-    r"\b(refund|policy|policies|privacy|terms|code\s+of\s+conduct)\b",
-    re.IGNORECASE,
-)
 COUNT_PATTERN = re.compile(r"\b(how many|count|total|number of)\b", re.IGNORECASE)
 MORE_RESULTS_PATTERN = re.compile(
     r"^\s*(more|next|show more|more results|next results|continue)\s*$",
@@ -522,14 +518,10 @@ def requested_event_limit(
 def likely_event_list_question(question: str) -> bool:
     if not EVENT_WORD_PATTERN.search(question):
         return False
-    if (
+    return bool(
         EVENT_LIST_COMMAND_PATTERN.search(question)
         or NYTW_LOCATION_PATTERN.search(question)
         or EVENT_LOCATION_SEARCH_PATTERN.search(question)
-    ):
-        return True
-    return bool(keyword_terms(question)) and not NON_SEARCH_EVENT_TOPIC_PATTERN.search(
-        question
     )
 
 

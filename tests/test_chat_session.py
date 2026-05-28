@@ -51,22 +51,30 @@ def test_answer_session_message_tracks_more_for_topic_event_queries() -> None:
 
         def ask(self, question, **kwargs):
             self.calls.append((question, kwargs.get("event_offset", 0)))
-            return f"{question} @ {kwargs.get('event_offset', 0)}"
+            return (
+                f"**The Future of AI Personalization** — 2026-06-04, 4:00pm ET "
+                f"— Murray Hill — {question} @ {kwargs.get('event_offset', 0)} "
+                "— https://partiful.com/e/example"
+            )
 
     states = {"local": ChatState()}
     agent = Agent()
 
     assert (
-        answer_session_message(agent, states, "local", "AI personalization events")
-        == "AI personalization events @ 0"
+        "AI personalization @ 0"
+        in answer_session_message(agent, states, "local", "AI personalization")
     )
     assert (
         answer_session_message(agent, states, "local", "more")
-        == "AI personalization events @ 25"
+        == (
+            "**The Future of AI Personalization** — 2026-06-04, 4:00pm ET "
+            "— Murray Hill — list events matching AI personalization @ 25 "
+            "— https://partiful.com/e/example"
+        )
     )
     assert agent.calls == [
-        ("AI personalization events", 0),
-        ("AI personalization events", 25),
+        ("AI personalization", 0),
+        ("list events matching AI personalization", 25),
     ]
 
 
@@ -82,7 +90,10 @@ def test_answer_session_message_tracks_more_when_answer_has_more_hint() -> None:
 
     answer_session_message(Agent(), states, "local", "AI personalization")
 
-    assert states["local"].conversation.last_event_question == "AI personalization"
+    assert (
+        states["local"].conversation.last_event_question
+        == "list events matching AI personalization"
+    )
 
 
 def test_answer_session_message_appends_event_map_links_from_plan_url_pattern() -> None:

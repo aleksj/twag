@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Callable, Protocol
 
 from .subconscious_agent import (
@@ -61,11 +62,29 @@ class AgentConversation:
             token_usage_callback=token_usage_callback,
             progress_callback=progress_callback,
         )
-        if likely_event_list_question(text) or _looks_like_pageable_event_answer(answer):
-            self.last_event_question = text
+        followup_question = _event_followup_question(text, answer)
+        if followup_question:
+            self.last_event_question = followup_question
             self.last_event_offset = 0
         return answer
 
 
+EVENT_ROW_ANSWER_PATTERN = re.compile(
+    r"(?m)^\*\*.+?\*\*\s+—\s+\d{4}-\d{2}-\d{2},"
+)
+
+
+def _event_followup_question(text: str, answer: str) -> str | None:
+    if likely_event_list_question(text):
+        return text
+    if _looks_like_pageable_event_answer(answer) or _looks_like_event_row_answer(answer):
+        return f"list events matching {text}"
+    return None
+
+
 def _looks_like_pageable_event_answer(answer: str) -> bool:
     return "More results are available. Send `more`" in answer
+
+
+def _looks_like_event_row_answer(answer: str) -> bool:
+    return bool(EVENT_ROW_ANSWER_PATTERN.search(answer))
