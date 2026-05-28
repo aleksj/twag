@@ -179,6 +179,7 @@ def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
         "zoom": city.map_zoom,
         "style": {
             "version": 8,
+            "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
             "sources": {
                 "osm": {
                     "type": "raster",
@@ -201,7 +202,7 @@ def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>{html.escape(title)}</title>
-  <link href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" rel="stylesheet">
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
   <link href="../../events_map.css" rel="stylesheet">
 </head>
 <body>
@@ -217,7 +218,8 @@ def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
   <div id="map"></div>
   <div id="error"></div>
 
-  <script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script>window.mapboxgl = window.maplibregl;</script>
   <script src="../../config.js"></script>
   <script src="../../events_map.js"></script>
   <script>initEventMap({config_json});</script>

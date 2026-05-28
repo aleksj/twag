@@ -166,7 +166,11 @@ def test_answer_in_thread_adds_map_link_for_mapped_event_results(monkeypatch, tm
     html = map_response.body.decode()
     assert '"token": ""' in html
     assert "tile.openstreetmap.org" in html
+    assert "maplibre-gl" in html
+    assert "window.mapboxgl = window.maplibregl" in html
+    assert "demotiles.maplibre.org/font" in html
     assert "mapbox://styles/mapbox" not in html
+    assert "api.mapbox.com/mapbox-gl-js" not in html
     assert f'"geojsonUrl": "{map_id}.geojson"' in html
 
 
