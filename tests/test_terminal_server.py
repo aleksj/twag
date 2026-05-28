@@ -4,6 +4,9 @@ from twag_clickhouse.terminal_server import (
     SessionCreateRequest,
     TerminalSession,
     _answer_in_thread,
+    _get_session,
+    _sessions,
+    _states,
     app,
     cities,
     create_session,
@@ -93,6 +96,48 @@ def test_answer_in_thread_emits_status_and_final_events(monkeypatch) -> None:
     assert typed_events[-1]["text"] == "answered how many events in soho?"
 
 
+def test_answer_in_thread_uses_terminal_agent_turn_limit(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_TERMINAL_AGENT_MAX_TURNS", "17")
+
+    class Agent:
+        def __init__(self) -> None:
+            self.max_turns = None
+
+        def ask(self, question, **kwargs):
+            self.max_turns = kwargs.get("max_turns")
+            return f"answered {question}"
+
+    agent = Agent()
+    session = TerminalSession(session_id="turn-limit-session", city="nyc", agent=agent)  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "how many events in soho?", events.append)
+
+    assert agent.max_turns == 17
+
+
+def test_terminal_session_can_be_restored_from_disk(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TWAG_TERMINAL_SESSION_DIR", str(tmp_path))
+
+    session = TerminalSession(session_id="persisted-session", city="nyc")
+    session.state.verbose = True
+    session.state.conversation.last_event_question = "list AI events"
+    session.state.conversation.last_event_offset = 25
+    events = []
+
+    _answer_in_thread(session, "/help", events.append)
+    _sessions.pop(session.session_id, None)
+    _states.pop(session.session_id, None)
+
+    restored = _get_session(session.session_id)
+
+    assert restored is not None
+    assert restored.city == "nyc"
+    assert restored.state.verbose is True
+    assert restored.state.conversation.last_event_question == "list AI events"
+    assert restored.state.conversation.last_event_offset == 25
+
+
 def test_answer_in_thread_tracks_more_without_unbacked_map_link(monkeypatch) -> None:
     class Agent:
         def __init__(self) -> None:
@@ -172,6 +217,97 @@ def test_answer_in_thread_adds_map_link_for_mapped_event_results(monkeypatch, tm
     assert "mapbox://styles/mapbox" not in html
     assert "api.mapbox.com/mapbox-gl-js" not in html
     assert f'"geojsonUrl": "{map_id}.geojson"' in html
+
+
+def test_map_command_with_query_generates_filtered_result_map(monkeypatch, tmp_path) -> None:
+    class Agent:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def ask(self, question, **kwargs):
+            self.calls.append(question)
+            self.last_event_map_rows = [{"event_id": "columbia-1"}]
+            return "Showing 1-1 of 1 matching event.\n\n**Columbia event**"
+
+    (tmp_path / "nyc.geojson").write_text(
+        """
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [-73.96, 40.81]},
+      "properties": {
+        "event_id": "columbia-1",
+        "event_date": "2026-06-02",
+        "title": "Columbia event"
+      }
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://natea.github.io/twag/")
+    monkeypatch.setattr("twag_clickhouse.terminal_server.DOCS_DIR", tmp_path)
+    session = TerminalSession(session_id="map-search-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "/map events at Columbia University", events.append)
+
+    typed_events = [event for event in events if event is not None]
+    final_text = typed_events[-1]["text"]
+    assert final_text.startswith("Showing 1-1 of 1 matching event.")
+    assert "**Columbia event**" in final_text
+    assert (
+        "[View on map](https://natea.github.io/twag/events_map_nyc.html"
+        "#date=2026-06-02&event_ids=columbia-1)"
+    ) in final_text
+    assert session.agent.calls == ["list events at Columbia University"]  # type: ignore[union-attr]
+
+    map_id = next(iter(session.map_results))
+    geojson = terminal_result_map_geojson(session.session_id, map_id)
+    assert geojson["metadata"]["count"] == 1
+    assert geojson["features"][0]["properties"]["event_id"] == "columbia-1"
+
+
+def test_map_command_with_plain_date_keeps_static_map_behavior(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://example.test/twag/")
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            raise AssertionError("date-only map command should not call agent")
+
+    session = TerminalSession(session_id="map-date-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "/map June 3", events.append)
+
+    typed_events = [event for event in events if event is not None]
+    assert typed_events[-1]["text"] == (
+        "[NY Tech Week map for 2026-06-03]"
+        "(https://example.test/twag/events_map_nyc.html#date=2026-06-03)"
+    )
+
+
+def test_map_command_with_relative_date_uses_current_date(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://example.test/twag/")
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-28")
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            raise AssertionError("date-only map command should not call agent")
+
+    session = TerminalSession(session_id="map-relative-date-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "/map tomorrow", events.append)
+
+    typed_events = [event for event in events if event is not None]
+    assert typed_events[-1]["text"] == (
+        "[NY Tech Week map for 2026-05-29]"
+        "(https://example.test/twag/events_map_nyc.html#date=2026-05-29)"
+    )
 
 
 def test_terminal_result_map_geojson_route_is_not_shadowed() -> None:

@@ -16,6 +16,7 @@ const state = {
   operatorToken: '',
   greetingShown: false,
   lastStatusLine: '',
+  inFlightPrompt: '',
 };
 
 const appBasePath = new URL('.', window.location.href).pathname;
@@ -288,6 +289,13 @@ function send(payload) {
   }
 }
 
+function restoreInFlightPrompt() {
+  const text = String(state.inFlightPrompt || '').trim();
+  if (!text || promptInput.value.trim()) return;
+  promptInput.value = text;
+  appendStatus('Restored the unsent prompt after disconnect.');
+}
+
 function submitPromptText(rawText) {
   const text = String(rawText || '').trim();
   if (!text) return false;
@@ -307,6 +315,7 @@ function submitPromptText(rawText) {
   }
 
   clearDraft();
+  state.inFlightPrompt = text;
   if (!send({ type: 'message', text })) return false;
   promptInput.value = '';
   appendMessage('user', text, '', { forceScroll: true });
@@ -385,6 +394,7 @@ function connect(session, options = {}) {
     } else if (event.type === 'delta') {
       setDraft(event.text || '', event.mode);
     } else if (event.type === 'final') {
+      state.inFlightPrompt = '';
       const shouldScroll = transcriptIsNearBottom();
       if (state.draftNode) {
         if (state.draftRenderFrame) {
@@ -411,6 +421,7 @@ function connect(session, options = {}) {
       appendStatus(`Done. Duration: ${event.duration_ms || 0}ms${tokenLine}`);
     } else if (event.type === 'error') {
       clearDraft();
+      state.inFlightPrompt = '';
       setConnection('error');
       appendStatus(event.error || 'Unknown error.');
       appendMessage('system', `Error: ${event.error || 'unknown error'}`);
@@ -426,12 +437,14 @@ function connect(session, options = {}) {
       return;
     }
     setConnection('closed');
+    restoreInFlightPrompt();
     appendStatus('Disconnected. Use reconnect, then send again.');
   });
 
   socket.addEventListener('error', () => {
     if (state.socket !== socket) return;
     setConnection('error');
+    restoreInFlightPrompt();
     appendStatus('Connection error. Use reconnect, then send again.');
   });
 }

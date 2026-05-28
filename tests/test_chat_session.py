@@ -7,6 +7,8 @@ from twag_clickhouse.chat_session import (
     active_city_override,
     answer_session_message,
     help_reply,
+    infer_date,
+    map_command_query,
     map_command_reply,
     map_url_for,
 )
@@ -28,6 +30,35 @@ def test_answer_session_message_supports_commands_without_agent_call() -> None:
         "Quiet mode is on"
     )
     assert states["local"].verbose is False
+
+
+def test_infer_date_uses_current_local_date_for_relative_terms(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-28")
+
+    assert infer_date("tomorrow", "2026-06-02") == "2026-05-29"
+    assert infer_date("today", "2026-06-02") == "2026-05-28"
+    assert infer_date("tonight", "2026-06-02") == "2026-05-28"
+    assert infer_date("friday", "2026-06-02") == "2026-05-29"
+    assert infer_date("thursday", "2026-06-02") == "2026-05-28"
+
+
+def test_map_command_query_distinguishes_dates_from_searches(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-28")
+
+    assert map_command_query("/map") == ""
+    assert map_command_query("/map 2026-06-03") == ""
+    assert map_command_query("/map June 3") == ""
+    assert map_command_query("/map tomorrow") == ""
+    assert map_command_query("/map events at Columbia University") == (
+        "events at Columbia University"
+    )
+    assert map_command_query("/map events at Columbia University tomorrow") == (
+        "events at Columbia University"
+    )
+    assert map_command_query("/map Columbia University on June 3") == (
+        "Columbia University"
+    )
+    assert map_command_query("events at Columbia University") == ""
 
 
 def test_answer_session_message_tracks_more_per_session() -> None:

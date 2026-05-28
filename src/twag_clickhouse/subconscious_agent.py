@@ -797,6 +797,7 @@ class NytwSubconsciousAgent:
         self.subconscious = subconscious
         self._clickhouse_lock = threading.Lock()
         self.last_event_map_rows: list[dict[str, Any]] = []
+        self.last_sql_queries: list[str] = []
 
     @classmethod
     def from_env(cls) -> "NytwSubconsciousAgent":
@@ -814,13 +815,32 @@ class NytwSubconsciousAgent:
         raw_stream_callback: Callable[[str], None] | None = None,
         token_usage_callback: TokenUsageCallback | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        conversation_context: str | None = None,
     ) -> str:
         self.last_event_map_rows = []
+        self.last_sql_queries = []
         city = active_city()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": build_system_prompt(city)},
-            {"role": "user", "content": question},
         ]
+        if conversation_context:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"{conversation_context}\n\n"
+                        "Use this brief context only to interpret follow-up references "
+                        "and reuse proven ClickHouse query patterns. Current query follows."
+                    ),
+                }
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "Understood. I will answer the current query using that context only when relevant.",
+                }
+            )
+        messages.append({"role": "user", "content": question})
         response_parts: list[str] = []
 
         if likely_event_list_question(question):
@@ -833,13 +853,13 @@ class NytwSubconsciousAgent:
                     "Building a ranked event query across titles, descriptions, "
                     "hosts, venues, and neighborhoods."
                 )
-            result = self._query_sql(
-                build_keyword_event_query(
-                    question,
-                    limit=page_size + 1,
-                    offset=event_offset,
-                )
+            sql = build_keyword_event_query(
+                question,
+                limit=page_size + 1,
+                offset=event_offset,
             )
+            self.last_sql_queries.append(sql)
+            result = self._query_sql(sql)
             if result.get("ok"):
                 self.last_event_map_rows = list((result.get("rows") or [])[:page_size])
             if progress_callback:
@@ -1132,7 +1152,10 @@ class NytwSubconsciousAgent:
 
         try:
             args = json.loads(function.get("arguments") or "{}")
-            return self._query_sql(args.get("sql", ""))
+            sql = args.get("sql", "")
+            if sql:
+                self.last_sql_queries.append(str(sql))
+            return self._query_sql(sql)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 

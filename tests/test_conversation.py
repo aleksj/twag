@@ -6,9 +6,13 @@ from twag_clickhouse.conversation import AgentConversation
 class RecordingAgent:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
+        self.contexts: list[str | None] = []
+        self.last_sql_queries: list[str] = []
 
-    def ask(self, question, *, event_offset=0, **_kwargs):  # type: ignore[no-untyped-def]
+    def ask(self, question, *, event_offset=0, conversation_context=None, **_kwargs):  # type: ignore[no-untyped-def]
         self.calls.append((question, event_offset))
+        self.contexts.append(conversation_context)
+        self.last_sql_queries = [f"SELECT '{question}'"]
         return f"{question} @ {event_offset}"
 
 
@@ -48,3 +52,21 @@ def test_conversation_resets_offset_for_new_event_query() -> None:
     conversation.answer(agent, "top 3 AI events")
 
     assert conversation.answer(agent, "more") == "top 3 AI events @ 3"
+
+
+def test_conversation_injects_compact_context_and_rewrites_followups() -> None:
+    conversation = AgentConversation()
+    agent = RecordingAgent()
+
+    conversation.answer(agent, "list AI events in SoHo")
+    answer = conversation.answer(agent, "only open RSVPs")
+
+    assert answer == "list AI events in SoHo; follow-up constraint: only open RSVPs @ 0"
+    assert agent.calls[-1] == (
+        "list AI events in SoHo; follow-up constraint: only open RSVPs",
+        0,
+    )
+    assert agent.contexts[-1] is not None
+    assert "Context of previous queries:" in agent.contexts[-1]
+    assert "User asked: list AI events in SoHo" in agent.contexts[-1]
+    assert "ClickHouse SQL: SELECT 'list AI events in SoHo'" in agent.contexts[-1]

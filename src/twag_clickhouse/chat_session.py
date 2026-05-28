@@ -5,12 +5,14 @@ import os
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any, Callable, Hashable, Iterator
 
 from .city import active_city, load_city
 from .conversation import AgentConversation, AgentLike
 from .subconscious_agent import (
     NytwSubconsciousAgent,
+    current_city_datetime,
     is_more_results_request,
     likely_event_list_question,
 )
@@ -60,6 +62,23 @@ _MONTH_NUM = {
     "oct": 10,
     "nov": 11,
     "dec": 12,
+}
+_RELATIVE_DATE_RE = re.compile(
+    r"\b(today|tonight|tomorrow|this\s+(?:morning|afternoon|evening))\b",
+    re.IGNORECASE,
+)
+_WEEKDAY_RE = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE,
+)
+_WEEKDAY_NUM = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
 }
 
 
@@ -159,9 +178,9 @@ def help_reply(*, presentation: ChatPresentation = DEFAULT_PRESENTATION) -> str:
         "`/quiet` - show only result updates and final answers\n\n"
         "Use concrete criteria like topic, date, neighborhood, host, capacity, "
         "RSVP status, or time.\n\n"
-        "Built by [Aleks](https://github.com/aleksj) and "
+        "Built by [Aleks Jakulin](https://github.com/aleksj) and "
         "[Nate Aune](https://github.com/natea), with contributions from "
-        "[Stage11](https://github.com/Stage-11-Agentics/)."
+        "[Stage11 Agentics](https://github.com/Stage-11-Agentics/)."
     )
 
 
@@ -174,10 +193,32 @@ def public_map_base_url() -> str:
     return os.getenv("TWAG_PUBLIC_MAP_BASE_URL", "").strip()
 
 
+def current_map_date() -> date:
+    override = os.getenv("TWAG_CURRENT_DATE", "").strip()
+    if override:
+        try:
+            return date.fromisoformat(override)
+        except ValueError:
+            LOGGER.warning("Ignoring invalid TWAG_CURRENT_DATE=%r", override)
+    return current_city_datetime(active_city()).date()
+
+
 def infer_date(text: str, fallback: str) -> str:
     iso = _ISO_DATE_RE.search(text)
     if iso:
         return iso.group(1)
+    base_date = current_map_date()
+    relative = _RELATIVE_DATE_RE.search(text)
+    if relative:
+        phrase = relative.group(1).lower()
+        if phrase == "tomorrow":
+            return (base_date + timedelta(days=1)).isoformat()
+        return base_date.isoformat()
+    weekday = _WEEKDAY_RE.search(text)
+    if weekday:
+        target = _WEEKDAY_NUM[weekday.group(1).lower()]
+        delta = (target - base_date.weekday()) % 7
+        return (base_date + timedelta(days=delta)).isoformat()
     md = _MONTH_DAY_RE.search(text)
     if md:
         month = _MONTH_NUM.get(md.group(1).lower())
@@ -247,6 +288,25 @@ def map_command_reply(
             f"{presentation.map_environment_name} to enable the map link."
         )
     return f"{presentation.map_prefix}[{city.short_name} map for {date_iso}]({url})"
+
+
+def map_command_query(text: str) -> str:
+    if chat_command(text) != "map":
+        return ""
+    parts = text.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if not arg:
+        return ""
+    inferred = infer_date(arg, active_city().default_map_date)
+    without_date = _ISO_DATE_RE.sub(" ", arg)
+    without_date = _MONTH_DAY_RE.sub(" ", without_date)
+    without_date = _RELATIVE_DATE_RE.sub(" ", without_date)
+    without_date = _WEEKDAY_RE.sub(" ", without_date)
+    without_date = re.sub(r"\s+", " ", without_date).strip(" ,;:-")
+    without_date = re.sub(r"\b(on|for|at|near|in)$", "", without_date, flags=re.I).strip(" ,;:-")
+    if inferred and not without_date:
+        return ""
+    return without_date or arg
 
 
 def is_subjective_question(text: str) -> bool:

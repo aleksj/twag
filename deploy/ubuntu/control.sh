@@ -3,6 +3,13 @@ set -euo pipefail
 
 SERVICE_USER="${SERVICE_USER:-$(id -un)}"
 ACTION="${1:-status}"
+JOURNAL_ARGS=()
+if [[ -n "${LOG_SINCE:-}" ]]; then
+  JOURNAL_ARGS+=(--since "$LOG_SINCE")
+fi
+if [[ "${LOG_FOLLOW:-true}" == "true" ]]; then
+  JOURNAL_ARGS+=(-f)
+fi
 
 case "$ACTION" in
   start|stop|restart|status)
@@ -15,23 +22,36 @@ case "$ACTION" in
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
       -u "twag-telegram-agent-boston@$SERVICE_USER.service" \
       -u "twag-nimble@$SERVICE_USER.service" \
-      -u "twag-terminal@$SERVICE_USER.service" -f
+      -u "twag-terminal@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   telegram-logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
-      -u "twag-telegram-agent-boston@$SERVICE_USER.service" -f
+      -u "twag-telegram-agent-boston@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   ny-telegram-logs)
-    journalctl -u "twag-telegram-agent@$SERVICE_USER.service" -f
+    journalctl -u "twag-telegram-agent@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   boston-telegram-logs)
-    journalctl -u "twag-telegram-agent-boston@$SERVICE_USER.service" -f
+    journalctl -u "twag-telegram-agent-boston@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   nimble-logs)
-    journalctl -u "twag-nimble@$SERVICE_USER.service" -f
+    journalctl -u "twag-nimble@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   terminal-logs)
-    journalctl -u "twag-terminal@$SERVICE_USER.service" -f
+    journalctl -u "twag-terminal@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
+    ;;
+  nginx-diagnose)
+    if ! command -v nginx >/dev/null 2>&1; then
+      echo "nginx is not installed on this host." >&2
+      exit 1
+    fi
+    sudo nginx -t
+    echo
+    echo "Enabled nginx site links:"
+    find /etc/nginx/sites-enabled -maxdepth 1 -type l -print -exec readlink -f {} \; 2>/dev/null || true
+    echo
+    echo "Server-name conflicts from nginx -T:"
+    sudo nginx -T 2>&1 | grep -F "conflicting server name" || echo "No conflicting server_name warnings found."
     ;;
   diagnose)
     echo "NY systemd unit:"
@@ -83,7 +103,10 @@ Usage:
   deploy/ubuntu/control.sh boston-telegram-logs
   deploy/ubuntu/control.sh nimble-logs
   deploy/ubuntu/control.sh terminal-logs
+  deploy/ubuntu/control.sh nginx-diagnose
   deploy/ubuntu/control.sh diagnose
+
+Set LOG_SINCE="2 hours ago" and/or LOG_FOLLOW=false for bounded journal output.
 
 Set SERVICE_USER=name if the systemd instance user is not the current user.
 USAGE

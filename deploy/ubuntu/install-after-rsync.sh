@@ -44,6 +44,7 @@ python3 -m venv "$APP_DIR/.venv"
 
 sudo install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ENV_DIR"
 sudo install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" /var/log/twag
+sudo install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" /var/log/twag/terminal-sessions
 if [[ ! -f "$ENV_FILE" ]]; then
   sudo install -m 0640 -o "$SERVICE_USER" -g "$SERVICE_GROUP" \
     "$APP_DIR/deploy/ubuntu/twag.env.example" "$ENV_FILE"
@@ -70,6 +71,7 @@ Completed:
   - created/updated $APP_DIR/.venv
   - installed TWAG into the venv
   - ensured $ENV_DIR and /var/log/twag exist
+  - ensured /var/log/twag/terminal-sessions exists
   - installed systemd unit files into $SYSTEMD_DIR
   - ran systemctl daemon-reload
 

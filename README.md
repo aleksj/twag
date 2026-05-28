@@ -194,6 +194,11 @@ sudo systemctl enable --now twag-terminal@$USER.service
 deploy/ubuntu/control.sh status
 ```
 
+The browser terminal keeps lightweight session snapshots in
+`TWAG_TERMINAL_SESSION_DIR` so follow-up commands such as `more` can survive a
+backend restart. The default deployed path is
+`/var/log/twag/terminal-sessions`.
+
 Useful logs:
 
 ```bash
@@ -201,6 +206,14 @@ journalctl -u twag-telegram-agent@$USER.service -f
 journalctl -u twag-telegram-agent-boston@$USER.service -f
 journalctl -u twag-nimble@$USER.service -f
 journalctl -u twag-terminal@$USER.service -f
+```
+
+The helper script wraps the same logs and can show bounded output:
+
+```bash
+deploy/ubuntu/control.sh terminal-logs
+LOG_SINCE="2 hours ago" LOG_FOLLOW=false deploy/ubuntu/control.sh terminal-logs
+deploy/ubuntu/control.sh nginx-diagnose
 ```
 
 Telegram read timeouts during long polling can happen occasionally. The agent logs them as transient and retries with backoff; investigate only if they cluster, exceed `TELEGRAM_REQUEST_TIMEOUT`, or coincide with duplicate polling processes for the same token.

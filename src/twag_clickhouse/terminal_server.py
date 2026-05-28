@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import pathlib
+import re
 import secrets
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import urlencode
 
 try:
     from dotenv import load_dotenv
@@ -35,11 +37,14 @@ from .chat_session import (
     answer_session_message,
     clear_chat_status,
     help_reply,
+    map_command_query,
+    map_url_for,
     question_log_route,
     status_text,
     update_chat_status,
 )
 from .city import CITIES, active_city, load_city
+from .conversation import ConversationTurn
 from .subconscious_agent import NytwSubconsciousAgent
 
 
@@ -50,6 +55,7 @@ TERMINAL_WEB_DIR = pathlib.Path(__file__).with_name("terminal_web")
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOCS_DIR = REPO_ROOT / "docs"
 LOGGER = logging.getLogger(__name__)
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 INTERNAL_TERMINAL_ERROR_REPLY = (
     "TWAG hit an internal error while answering. Please try again later."
 )
@@ -81,6 +87,26 @@ def require_terminal_auth(request: Request) -> None:
     raise HTTPException(status_code=401, detail="Operator token required")
 
 
+def terminal_session_dir() -> pathlib.Path | None:
+    raw = os.getenv("TWAG_TERMINAL_SESSION_DIR")
+    if raw is not None:
+        raw = raw.strip()
+        return pathlib.Path(raw) if raw else None
+    default = pathlib.Path("/var/log/twag/terminal-sessions")
+    return default if default.parent.is_dir() else None
+
+
+def terminal_agent_max_turns() -> int:
+    raw = os.getenv("TWAG_TERMINAL_AGENT_MAX_TURNS", "").strip()
+    if not raw:
+        return 12
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        LOGGER.warning("Ignoring invalid TWAG_TERMINAL_AGENT_MAX_TURNS=%r", raw)
+        return 12
+
+
 @dataclass
 class TerminalSession:
     session_id: str
@@ -95,6 +121,7 @@ class LazySessionAgent:
         self.session = session
 
     def ask(self, *args: Any, **kwargs: Any) -> str:
+        kwargs.setdefault("max_turns", terminal_agent_max_turns())
         return _session_agent(self.session).ask(*args, **kwargs)
 
 
@@ -106,6 +133,118 @@ app = FastAPI(
 _sessions: dict[str, TerminalSession] = {}
 _states: dict[str, ChatState] = {}
 _city_lock = threading.Lock()
+
+
+def _session_path(session_id: str) -> pathlib.Path | None:
+    base = terminal_session_dir()
+    if base is None or not SESSION_ID_RE.fullmatch(session_id):
+        return None
+    return base / f"{session_id}.json"
+
+
+def _state_snapshot(state: ChatState) -> dict[str, Any]:
+    return {
+        "conversation": {
+            "last_event_question": state.conversation.last_event_question,
+            "last_event_offset": state.conversation.last_event_offset,
+            "recent_turns": [
+                {
+                    "user_text": turn.user_text,
+                    "effective_question": turn.effective_question,
+                    "answer_summary": turn.answer_summary,
+                    "sql_queries": turn.sql_queries,
+                }
+                for turn in state.conversation.recent_turns
+            ],
+        },
+        "verbose": state.verbose,
+    }
+
+
+def _restore_state(snapshot: dict[str, Any] | None) -> ChatState:
+    state = ChatState()
+    if not isinstance(snapshot, dict):
+        return state
+    conversation = snapshot.get("conversation") or {}
+    if isinstance(conversation, dict):
+        last_question = conversation.get("last_event_question")
+        state.conversation.last_event_question = (
+            str(last_question) if last_question else None
+        )
+        try:
+            state.conversation.last_event_offset = int(
+                conversation.get("last_event_offset") or 0
+            )
+        except (TypeError, ValueError):
+            state.conversation.last_event_offset = 0
+        recent_turns = conversation.get("recent_turns")
+        if isinstance(recent_turns, list):
+            for item in recent_turns[-4:]:
+                if not isinstance(item, dict):
+                    continue
+                sql_queries = item.get("sql_queries") or []
+                state.conversation.recent_turns.append(
+                    ConversationTurn(
+                        user_text=str(item.get("user_text") or ""),
+                        effective_question=str(item.get("effective_question") or ""),
+                        answer_summary=str(item.get("answer_summary") or ""),
+                        sql_queries=[
+                            str(sql)
+                            for sql in sql_queries
+                            if isinstance(sql, str) and sql.strip()
+                        ][:3],
+                    )
+                )
+    state.verbose = bool(snapshot.get("verbose"))
+    return state
+
+
+def _save_session(session: TerminalSession) -> None:
+    path = _session_path(session.session_id)
+    if path is None:
+        return
+    snapshot = {
+        "version": 1,
+        "session_id": session.session_id,
+        "city": session.city,
+        "updated_at": time.time(),
+        "state": _state_snapshot(session.state),
+        "map_results": session.map_results,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+        tmp_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        tmp_path.replace(path)
+    except OSError:
+        LOGGER.exception("Could not persist terminal session")
+
+
+def _load_session(session_id: str) -> TerminalSession | None:
+    path = _session_path(session_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        snapshot = json.loads(path.read_text(encoding="utf-8"))
+        city = load_city(str(snapshot.get("city") or active_city().slug))
+        state = _restore_state(snapshot.get("state"))
+        map_results = snapshot.get("map_results")
+        session = TerminalSession(
+            session_id=session_id,
+            city=city.slug,
+            state=state,
+            map_results=map_results if isinstance(map_results, dict) else {},
+        )
+    except Exception:
+        LOGGER.exception("Could not restore terminal session")
+        return None
+    _sessions[session_id] = session
+    _states[session_id] = session.state
+    return session
+
+
+def _get_session(session_id: str) -> TerminalSession | None:
+    return _sessions.get(session_id) or _load_session(session_id)
 
 
 @app.get("/")
@@ -147,7 +286,7 @@ def terminal_asset(asset: str) -> FileResponse:
 
 @app.get("/terminal/map/{session_id}/{map_id}.geojson")
 def terminal_result_map_geojson(session_id: str, map_id: str) -> dict[str, Any]:
-    session = _sessions.get(session_id)
+    session = _get_session(session_id)
     if session is None or map_id not in session.map_results:
         raise HTTPException(status_code=404, detail="Unknown map result")
     result = session.map_results[map_id]
@@ -165,7 +304,7 @@ def terminal_result_map_geojson(session_id: str, map_id: str) -> dict[str, Any]:
 
 @app.get("/terminal/map/{session_id}/{map_id}", response_class=HTMLResponse)
 def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
-    session = _sessions.get(session_id)
+    session = _get_session(session_id)
     if session is None or map_id not in session.map_results:
         raise HTTPException(status_code=404, detail="Unknown map result")
     result = session.map_results[map_id]
@@ -279,6 +418,7 @@ def create_session(request: SessionCreateRequest | None = None) -> dict[str, Any
     session = TerminalSession(session_id=session_id, city=city.slug)
     _sessions[session_id] = session
     _states[session_id] = session.state
+    _save_session(session)
     return {
         "session_id": session_id,
         "city": city.slug,
@@ -362,7 +502,26 @@ def _terminal_map_link(session: TerminalSession) -> str:
         )
         for old_key in oldest[:-20]:
             session.map_results.pop(old_key, None)
+
+    date_iso = (dates or [load_city(session.city).default_map_date])[0]
+    public_url = map_url_for(date_iso)
+    if public_url:
+        separator = "&" if "#" in public_url else "#"
+        fragment = urlencode({"event_ids": ",".join(event_ids)})
+        return f"\n\n[View on map]({public_url}{separator}{fragment})"
     return f"\n\n[View on map](/terminal/map/{session.session_id}/{map_id})"
+
+
+def _terminal_map_command_search_query(text: str) -> str:
+    query = map_command_query(text)
+    if not query:
+        return ""
+    lowered = query.lower()
+    if lowered.startswith("list "):
+        return query
+    if lowered.startswith(("event ", "events ")):
+        return f"list {query}"
+    return f"list events matching {query}"
 
 
 @app.websocket("/sessions/{session_id}")
@@ -376,7 +535,7 @@ async def terminal_websocket_session(websocket: WebSocket, session_id: str) -> N
 
 
 async def _websocket_session(websocket: WebSocket, session_id: str) -> None:
-    session = _sessions.get(session_id)
+    session = _get_session(session_id)
     if session is None:
         await websocket.close(code=4404)
         return
@@ -419,7 +578,9 @@ async def _set_session_city(
 
     session.city = city.slug
     session.state = ChatState()
+    session.map_results = {}
     _states[session.session_id] = session.state
+    _save_session(session)
     await websocket.send_json(
         {
             "type": "city",
@@ -480,7 +641,9 @@ def _answer_in_thread(
     try:
         with _city_lock:
             with active_city_override(session.city):
-                route, first_step = answer_route(text, state)
+                agent_text = _terminal_map_command_search_query(text)
+                question_text = agent_text or text
+                route, first_step = answer_route(question_text, state)
                 update_chat_status(
                     state,
                     question=text,
@@ -497,13 +660,20 @@ def _answer_in_thread(
                     LazySessionAgent(session),
                     _states,
                     session.session_id,
-                    text,
+                    question_text,
                     progress=progress,
                     stream_callback=stream_callback,
                     raw_stream_callback=raw_stream_callback,
                     token_usage_callback=usage.add,
                 )
-                answer += _terminal_map_link(session)
+                map_link = _terminal_map_link(session)
+                if agent_text:
+                    if map_link:
+                        answer += map_link
+                    else:
+                        answer += "\n\nNo mapped matching events found."
+                else:
+                    answer += map_link
         emit(
             {
                 "type": "final",
@@ -525,6 +695,7 @@ def _answer_in_thread(
         )
     finally:
         clear_chat_status(state)
+        _save_session(session)
         emit(None)
 
 

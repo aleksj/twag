@@ -10,12 +10,29 @@ function pad2(n) {
 
 function parseDateFromHash() {
   const raw = (window.location.hash || "").replace(/^#/, "");
-  const match = raw.match(/date=(\d{4}-\d{2}-\d{2})/);
-  return match ? match[1] : null;
+  const params = new URLSearchParams(raw);
+  const date = params.get("date");
+  return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+}
+
+function parseEventIdsFromUrl() {
+  const ids = new Set();
+  for (const source of [window.location.search.replace(/^\?/, ""), window.location.hash.replace(/^#/, "")]) {
+    const params = new URLSearchParams(source);
+    const raw = params.get("event_ids") || params.get("ids");
+    if (!raw) continue;
+    raw.split(",")
+      .map(value => value.trim())
+      .filter(Boolean)
+      .forEach(value => ids.add(value));
+  }
+  return [...ids];
 }
 
 function setDateInHash(date) {
-  window.location.hash = "date=" + date;
+  const params = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+  params.set("date", date);
+  window.location.hash = params.toString();
 }
 
 function formatHumanDate(iso) {
@@ -41,6 +58,29 @@ function filterFeaturesByDate(geojson, date) {
     type: "FeatureCollection",
     features: geojson.features.filter(f => f.properties.event_date === date),
   };
+}
+
+function filterFeaturesByEventIds(geojson, eventIds) {
+  if (!eventIds.length) return geojson;
+  const wanted = new Set(eventIds);
+  const order = new Map(eventIds.map((eventId, index) => [eventId, index]));
+  const features = geojson.features
+    .filter(f => wanted.has(String(f.properties.event_id || "")))
+    .sort((a, b) => {
+      const aOrder = order.get(String(a.properties.event_id || "")) ?? eventIds.length;
+      const bOrder = order.get(String(b.properties.event_id || "")) ?? eventIds.length;
+      return aOrder - bOrder;
+    });
+  return { type: "FeatureCollection", features };
+}
+
+function datesForFeatures(features, fallbackDates) {
+  const dates = [...new Set(
+    features
+      .map(feature => feature.properties.event_date)
+      .filter(Boolean)
+  )].sort();
+  return dates.length ? dates : fallbackDates;
 }
 
 function escapeHtml(value) {
@@ -87,24 +127,30 @@ async function initEventMap(config) {
     return;
   }
   const fullGeoJson = await response.json();
+  const eventIds = parseEventIdsFromUrl();
+  const resultGeoJson = filterFeaturesByEventIds(fullGeoJson, eventIds);
+  const dateRange = datesForFeatures(resultGeoJson.features, config.dateRange);
 
-  const initialDate = parseDateFromHash() || config.defaultDate;
+  const requestedDate = parseDateFromHash();
+  const initialDate = requestedDate && dateRange.includes(requestedDate)
+    ? requestedDate
+    : (dateRange[0] || config.defaultDate);
   let activeDate = initialDate;
 
   const datePicker = document.getElementById("date-picker");
-  buildDatePicker(datePicker, config.dateRange, activeDate, (date) => {
+  buildDatePicker(datePicker, dateRange, activeDate, (date) => {
     activeDate = date;
     setDateInHash(date);
     refresh();
   });
 
   function refresh() {
-    buildDatePicker(datePicker, config.dateRange, activeDate, (date) => {
+    buildDatePicker(datePicker, dateRange, activeDate, (date) => {
       activeDate = date;
       setDateInHash(date);
       refresh();
     });
-    const filtered = filterFeaturesByDate(fullGeoJson, activeDate);
+    const filtered = filterFeaturesByDate(resultGeoJson, activeDate);
     document.getElementById("count").textContent =
       `${filtered.features.length} events on ${formatHumanDate(activeDate)}`;
     const source = map.getSource("events");
@@ -116,7 +162,7 @@ async function initEventMap(config) {
   map.on("load", () => {
     map.addSource("events", {
       type: "geojson",
-      data: filterFeaturesByDate(fullGeoJson, activeDate),
+      data: filterFeaturesByDate(resultGeoJson, activeDate),
       cluster: true,
       clusterMaxZoom: 14,
       clusterRadius: 50,
