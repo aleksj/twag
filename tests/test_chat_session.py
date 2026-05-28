@@ -44,6 +44,34 @@ def test_answer_session_message_tracks_more_per_session() -> None:
     assert answer_session_message(Agent(), states, "local", "more") == "top 3 AI events @ 3"
 
 
+def test_answer_session_message_appends_event_map_links_from_plan_url_pattern() -> None:
+    class Agent:
+        def ask(self, question, **kwargs):
+            return f"{question} @ {kwargs.get('event_offset', 0)}"
+
+    env = {
+        "TWAG_CITY": "boston",
+        "TWAG_PUBLIC_MAP_BASE_URL": "https://natea.github.io/twag/",
+    }
+    states = {"local": ChatState()}
+
+    with patch.dict("os.environ", env, clear=True):
+        answer = answer_session_message(
+            Agent(),
+            states,
+            "local",
+            "top 3 AI events on May 27",
+        )
+        more = answer_session_message(Agent(), states, "local", "more")
+
+    expected_map = (
+        "[View on the map]"
+        "(https://natea.github.io/twag/events_map_boston.html#date=2026-05-27)"
+    )
+    assert answer == f"top 3 AI events on May 27 @ 0\n\n{expected_map}"
+    assert more == f"top 3 AI events on May 27 @ 3\n\n{expected_map}"
+
+
 def test_answer_session_message_hides_agent_configuration_errors() -> None:
     class Agent:
         def ask(self, question, **kwargs):

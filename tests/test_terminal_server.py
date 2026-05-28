@@ -88,7 +88,7 @@ def test_answer_in_thread_emits_status_and_final_events() -> None:
     assert typed_events[-1]["text"] == "answered how many events in soho?"
 
 
-def test_answer_in_thread_tracks_more_without_terminal_map_link(monkeypatch) -> None:
+def test_answer_in_thread_tracks_more_with_contextual_map_link(monkeypatch) -> None:
     class Agent:
         def __init__(self) -> None:
             self.calls = []
@@ -106,12 +106,14 @@ def test_answer_in_thread_tracks_more_without_terminal_map_link(monkeypatch) -> 
     _answer_in_thread(session, "list events involving running", first_events.append)
     _answer_in_thread(session, "more", more_events.append)
 
+    expected_map = (
+        "[View on the map]"
+        "(https://example.test/map/events_map_nyc.html#date=2026-06-02)"
+    )
     first_typed = [event for event in first_events if event is not None]
     more_typed = [event for event in more_events if event is not None]
-    assert first_typed[-1]["text"] == "list events involving running @ 0"
-    assert more_typed[-1]["text"] == "list events involving running @ 25"
-    assert "View on map" not in first_typed[-1]["text"]
-    assert "View on map" not in more_typed[-1]["text"]
+    assert first_typed[-1]["text"] == f"list events involving running @ 0\n\n{expected_map}"
+    assert more_typed[-1]["text"] == f"list events involving running @ 25\n\n{expected_map}"
     assert agent.calls == [
         ("list events involving running", 0),
         ("list events involving running", 25),

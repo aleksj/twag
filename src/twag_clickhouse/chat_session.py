@@ -210,7 +210,25 @@ def map_link_line(
     url = map_url_for(date_iso)
     if not url:
         return ""
-    return f"\n\n{presentation.map_prefix}[View on map]({url})"
+    return f"\n\n{presentation.map_prefix}[View on the map]({url})"
+
+
+def event_answer_map_link(
+    text: str,
+    state: ChatState,
+    *,
+    presentation: ChatPresentation = DEFAULT_PRESENTATION,
+) -> str:
+    if is_more_results_request(text):
+        if not state.conversation.last_event_question:
+            return ""
+        return map_link_line(
+            state.conversation.last_event_question,
+            presentation=presentation,
+        )
+    if likely_event_list_question(text):
+        return map_link_line(text, presentation=presentation)
+    return ""
 
 
 def map_command_reply(
@@ -372,7 +390,7 @@ def answer_session_message(
             )
         except Exception as exc:
             return agent_error_reply(exc)
-        return answer
+        return answer + event_answer_map_link(text, state, presentation=presentation)
 
     if progress:
         progress(f"Handing the request to the {active_city().short_name} search pipeline.")
@@ -387,4 +405,4 @@ def answer_session_message(
         )
     except Exception as exc:
         return agent_error_reply(exc)
-    return answer
+    return answer + event_answer_map_link(text, state, presentation=presentation)
