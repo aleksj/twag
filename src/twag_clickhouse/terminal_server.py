@@ -173,15 +173,27 @@ def terminal_result_map(session_id: str, map_id: str) -> HTMLResponse:
     dates = list(result.get("dates") or [city.default_map_date])
     title = f"{city.short_name} search results"
     config = {
-        "token": "__TOKEN__",
+        "token": "",
         "centerLat": city.map_center_lat,
         "centerLon": city.map_center_lon,
         "zoom": city.map_zoom,
+        "style": {
+            "version": 8,
+            "sources": {
+                "osm": {
+                    "type": "raster",
+                    "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+                    "tileSize": 256,
+                    "attribution": "© OpenStreetMap contributors",
+                }
+            },
+            "layers": [{"id": "osm", "type": "raster", "source": "osm"}],
+        },
         "geojsonUrl": f"{map_id}.geojson",
         "dateRange": dates,
         "defaultDate": dates[0],
     }
-    config_json = json.dumps(config).replace('"__TOKEN__"', "window.TWAG_MAPBOX_TOKEN")
+    config_json = json.dumps(config)
     return HTMLResponse(
         f"""<!doctype html>
 <html lang="en">

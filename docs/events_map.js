@@ -71,10 +71,10 @@ function popupHtml(props) {
 }
 
 async function initEventMap(config) {
-  mapboxgl.accessToken = config.token;
+  mapboxgl.accessToken = config.token || "";
   const map = new mapboxgl.Map({
     container: "map",
-    style: "mapbox://styles/mapbox/streets-v12",
+    style: config.style || "mapbox://styles/mapbox/streets-v12",
     center: [config.centerLon, config.centerLat],
     zoom: config.zoom,
   });

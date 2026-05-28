@@ -13,6 +13,7 @@ from twag_clickhouse.terminal_server import (
     root,
     terminal_asset,
     terminal_index,
+    terminal_result_map,
     terminal_result_map_geojson,
 )
 
@@ -160,6 +161,13 @@ def test_answer_in_thread_adds_map_link_for_mapped_event_results(monkeypatch, tm
     geojson = terminal_result_map_geojson(session.session_id, map_id)
     assert geojson["metadata"]["count"] == 1
     assert geojson["features"][0]["properties"]["event_id"] == "mapped-1"
+
+    map_response = terminal_result_map(session.session_id, map_id)
+    html = map_response.body.decode()
+    assert '"token": ""' in html
+    assert "tile.openstreetmap.org" in html
+    assert "mapbox://styles/mapbox" not in html
+    assert f'"geojsonUrl": "{map_id}.geojson"' in html
 
 
 def test_terminal_result_map_geojson_route_is_not_shadowed() -> None:
