@@ -12,6 +12,7 @@ const state = {
   sessionId: '',
   city: '',
   draftNode: null,
+  draftRenderFrame: 0,
   operatorToken: '',
   greetingShown: false,
   lastStatusLine: '',
@@ -84,29 +85,6 @@ function anchorHtml(url, label = url) {
   return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
 }
 
-function anchorNode(url, label = url) {
-  const href = safeUrl(url);
-  if (!href) return document.createTextNode(label);
-
-  const anchor = document.createElement('a');
-  anchor.href = href;
-  anchor.target = '_blank';
-  anchor.rel = 'noreferrer';
-  anchor.textContent = label;
-  return anchor;
-}
-
-function commandLinkNode(command, label = command) {
-  const normalized = String(command || '').trim();
-  if (!normalized) return document.createTextNode(label);
-
-  const anchor = document.createElement('a');
-  anchor.href = '#';
-  anchor.dataset.commandLink = encodeURIComponent(normalized);
-  anchor.textContent = label;
-  return anchor;
-}
-
 function commandLinkHtml(command, label = command) {
   const normalized = String(command || '').trim();
   if (!normalized) return escapeHtml(label);
@@ -147,65 +125,6 @@ function markdownToHtml(text) {
   }
 
   return html;
-}
-
-function codeNode(code) {
-  if (code.trim().toLowerCase() === 'more') {
-    return commandLinkNode('more', code);
-  }
-
-  const element = document.createElement('code');
-  element.textContent = code;
-  return element;
-}
-
-function strongNode(text) {
-  const element = document.createElement('strong');
-  element.textContent = text;
-  return element;
-}
-
-function formatTextNode(node) {
-  const text = node.nodeValue || '';
-  const pattern = /`([^`\n]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*\n][\s\S]*?[^*\n])\*\*|(https?:\/\/[^\s<]+)/g;
-  let lastIndex = 0;
-  let match;
-  const fragment = document.createDocumentFragment();
-
-  while ((match = pattern.exec(text)) !== null) {
-    fragment.append(document.createTextNode(text.slice(lastIndex, match.index)));
-
-    if (match[1]) {
-      fragment.append(codeNode(match[1]));
-    } else if (match[2] && match[3]) {
-      fragment.append(anchorNode(match[3], match[2]));
-    } else if (match[4]) {
-      fragment.append(strongNode(match[4]));
-    } else {
-      const bareMatch = match[5] || '';
-      const trailing = bareMatch.match(/[),.;:!?]+$/)?.[0] || '';
-      const url = trailing ? bareMatch.slice(0, -trailing.length) : bareMatch;
-      fragment.append(anchorNode(url));
-      if (trailing) fragment.append(document.createTextNode(trailing));
-    }
-
-    lastIndex = pattern.lastIndex;
-  }
-
-  if (lastIndex === 0) return;
-  fragment.append(document.createTextNode(text.slice(lastIndex)));
-  node.replaceWith(fragment);
-}
-
-function formatContentInPlace(root) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const textNodes = [];
-  while (walker.nextNode()) {
-    textNodes.push(walker.currentNode);
-  }
-  for (const node of textNodes) {
-    formatTextNode(node);
-  }
 }
 
 function clipboardTextForNode(node) {
@@ -296,25 +215,47 @@ function appendMessage(role, text, className = '', options = {}) {
   return row;
 }
 
-function setDraft(text, mode) {
+function renderDraftNow() {
+  if (!state.draftNode) return;
+
+  const content = state.draftNode.querySelector('.content');
+  const raw = content.dataset.raw || '';
+  if (content.dataset.renderedRaw === raw) return;
+
   const shouldScroll = transcriptIsNearBottom();
+  const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
+  content.innerHTML = markdownToHtml(raw);
+  content.dataset.renderedRaw = raw;
+
+  if (shouldScroll) scrollTranscriptToBottom();
+  else transcript.scrollTop = transcript.scrollHeight - beforeBottom;
+}
+
+function scheduleDraftRender() {
+  if (state.draftRenderFrame) return;
+  state.draftRenderFrame = window.requestAnimationFrame(() => {
+    state.draftRenderFrame = 0;
+    renderDraftNow();
+  });
+}
+
+function setDraft(text, mode) {
   if (!state.draftNode) {
-    state.draftNode = appendMessage('twag', '', 'draft', { forceScroll: shouldScroll });
+    state.draftNode = appendMessage('twag', '', 'draft', { forceScroll: transcriptIsNearBottom() });
   }
   const content = state.draftNode.querySelector('.content');
   const previous = content.dataset.raw || '';
   const next = mode === 'append' ? previous + text : text;
   if (next === previous) return;
   content.dataset.raw = next;
-  if (next.startsWith(previous)) {
-    content.append(document.createTextNode(next.slice(previous.length)));
-  } else {
-    content.textContent = next;
-  }
-  if (shouldScroll) scrollTranscriptToBottom();
+  scheduleDraftRender();
 }
 
 function clearDraft() {
+  if (state.draftRenderFrame) {
+    window.cancelAnimationFrame(state.draftRenderFrame);
+    state.draftRenderFrame = 0;
+  }
   if (state.draftNode) {
     state.draftNode.remove();
     state.draftNode = null;
@@ -444,20 +385,19 @@ function connect(session, options = {}) {
     } else if (event.type === 'final') {
       const shouldScroll = transcriptIsNearBottom();
       if (state.draftNode) {
+        if (state.draftRenderFrame) {
+          window.cancelAnimationFrame(state.draftRenderFrame);
+          state.draftRenderFrame = 0;
+        }
         const row = state.draftNode;
         const content = row.querySelector('.content');
         const raw = event.text || content.dataset.raw || '';
         const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
         row.classList.remove('draft');
         content.dataset.raw = raw;
-        const currentText = content.textContent || '';
-        if (raw.startsWith(currentText)) {
-          content.append(document.createTextNode(raw.slice(currentText.length)));
-          formatContentInPlace(content);
-        } else if (currentText !== raw) {
+        if (content.dataset.renderedRaw !== raw) {
           content.innerHTML = markdownToHtml(raw);
-        } else {
-          formatContentInPlace(content);
+          content.dataset.renderedRaw = raw;
         }
         state.draftNode = null;
         if (shouldScroll) scrollTranscriptToBottom();
