@@ -49,7 +49,7 @@ def test_ready_event_includes_city_specific_telegram_greeting() -> None:
     assert event["type"] == "ready"
     assert event["city"] == "boston"
     assert "**TWAG Boston Tech Week Bot**" in event["greeting"]
-    assert "**Sponsored by data.flowers**" in event["greeting"]
+    assert "**Sponsored by Data.Flowers**" in event["greeting"]
     assert "List AI events in Cambridge" in event["greeting"]
     assert "Use concrete criteria" in event["greeting"]
 
@@ -86,6 +86,36 @@ def test_answer_in_thread_emits_status_and_final_events() -> None:
     assert any(event.get("step") == "Fake search step." for event in typed_events)
     assert typed_events[-1]["type"] == "final"
     assert typed_events[-1]["text"] == "answered how many events in soho?"
+
+
+def test_answer_in_thread_tracks_more_without_terminal_map_link(monkeypatch) -> None:
+    class Agent:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def ask(self, question, **kwargs):
+            self.calls.append((question, kwargs.get("event_offset", 0)))
+            return f"{question} @ {kwargs.get('event_offset', 0)}"
+
+    monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://example.test/map/")
+    agent = Agent()
+    session = TerminalSession(session_id="more-session", city="nyc", agent=agent)  # type: ignore[arg-type]
+    first_events = []
+    more_events = []
+
+    _answer_in_thread(session, "list events involving running", first_events.append)
+    _answer_in_thread(session, "more", more_events.append)
+
+    first_typed = [event for event in first_events if event is not None]
+    more_typed = [event for event in more_events if event is not None]
+    assert first_typed[-1]["text"] == "list events involving running @ 0"
+    assert more_typed[-1]["text"] == "list events involving running @ 25"
+    assert "View on map" not in first_typed[-1]["text"]
+    assert "View on map" not in more_typed[-1]["text"]
+    assert agent.calls == [
+        ("list events involving running", 0),
+        ("list events involving running", 25),
+    ]
 
 
 def test_answer_in_thread_does_not_create_agent_for_local_commands() -> None:
@@ -136,4 +166,4 @@ def test_answer_in_thread_does_not_emit_raw_unhandled_exception_text(monkeypatch
     typed_events = [event for event in events if event is not None]
     assert typed_events[-1]["type"] == "error"
     assert "secret details" not in typed_events[-1]["error"]
-    assert "server logs" in typed_events[-1]["error"]
+    assert "Please try again later" in typed_events[-1]["error"]

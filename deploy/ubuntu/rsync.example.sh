@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copy this file to deploy/ubuntu/rsync.privileged.sh and edit the values.
-# The privileged copy is ignored by Git.
+# Deployment variables are loaded from the ignored .env file when present.
+# You can still override them in the shell for one-off runs.
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ROOT_DIR/.env"
+  set +a
+fi
 
 REMOTE_USER="${REMOTE_USER:-ubuntu}"
-REMOTE_HOST="${REMOTE_HOST:-203.0.113.10}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST in .env or the shell}"
 REMOTE_DIR="${REMOTE_DIR:-/home/$REMOTE_USER/twag}"
 SSH_PORT="${SSH_PORT:-22}"
 RUN_REMOTE_INSTALL="${RUN_REMOTE_INSTALL:-false}"
 SYNC_ENV_FILE="${SYNC_ENV_FILE:-true}"
 LOCAL_ENV_FILE="${LOCAL_ENV_FILE:-}"
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:-/etc/twag/twag.env}"
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOCAL_ENV_FILE="${LOCAL_ENV_FILE:-$ROOT_DIR/.env}"
 
 rsync -az --delete \

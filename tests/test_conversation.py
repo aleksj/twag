@@ -19,13 +19,13 @@ def test_conversation_tracks_event_list_for_more() -> None:
     assert conversation.answer(agent, "list events involving running") == (
         "list events involving running @ 0"
     )
-    assert conversation.answer(agent, "more") == "list events involving running @ 5"
-    assert conversation.answer(agent, "next") == "list events involving running @ 10"
+    assert conversation.answer(agent, "more") == "list events involving running @ 25"
+    assert conversation.answer(agent, "next") == "list events involving running @ 50"
 
     assert agent.calls == [
         ("list events involving running", 0),
-        ("list events involving running", 5),
-        ("list events involving running", 10),
+        ("list events involving running", 25),
+        ("list events involving running", 50),
     ]
 
 

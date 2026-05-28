@@ -95,7 +95,7 @@ def test_answer_message_returns_greeting_for_start():
 
     assert answer_message(Agent(), {}, 123, "/start") == GREETING_REPLY
     assert GREETING_REPLY == HELP_REPLY
-    assert "**Sponsored by data.flowers**" in GREETING_REPLY
+    assert "**Sponsored by Data.Flowers**" in GREETING_REPLY
     assert "List AI events in SoHo" in GREETING_REPLY
     assert "Use concrete criteria" in GREETING_REPLY
 

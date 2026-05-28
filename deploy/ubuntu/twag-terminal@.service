@@ -1,5 +1,5 @@
 [Unit]
-Description=TWAG local operator browser terminal (%i)
+Description=TWAG browser terminal backend (%i)
 After=network-online.target
 Wants=network-online.target
 

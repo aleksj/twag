@@ -56,11 +56,7 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-for unit in \
-  twag-telegram-agent@.service \
-  twag-telegram-agent-boston@.service \
-  twag-nimble@.service \
-  twag-terminal@.service; do
+for unit in twag-telegram-agent@.service twag-telegram-agent-boston@.service twag-nimble@.service twag-terminal@.service; do
   sed "s#__APP_DIR__#$APP_DIR#g" "$APP_DIR/deploy/ubuntu/$unit" > "$tmpdir/$unit"
   sudo install -m 0644 "$tmpdir/$unit" "$SYSTEMD_DIR/$unit"
 done

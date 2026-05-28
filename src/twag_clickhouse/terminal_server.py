@@ -41,14 +41,13 @@ from .city import CITIES, active_city, load_city
 from .subconscious_agent import NytwSubconsciousAgent
 
 
-DEFAULT_TERMINAL_HOST = "127.0.0.1"
+DEFAULT_TERMINAL_HOST = "localhost"
 DEFAULT_TERMINAL_PORT = 8765
 TERMINAL_TOKEN_HEADER = "x-twag-terminal-token"
 TERMINAL_WEB_DIR = pathlib.Path(__file__).with_name("terminal_web")
 LOGGER = logging.getLogger(__name__)
 INTERNAL_TERMINAL_ERROR_REPLY = (
-    "The local TWAG terminal backend hit an internal error. "
-    "Check the server logs for details."
+    "TWAG hit an internal error while answering. Please try again later."
 )
 
 
@@ -171,6 +170,15 @@ def create_session_endpoint(
     return create_session(request)
 
 
+@app.post("/terminal/sessions", include_in_schema=False)
+def create_terminal_session_endpoint(
+    http_request: Request,
+    request: SessionCreateRequest | None = None,
+) -> dict[str, Any]:
+    require_terminal_auth(http_request)
+    return create_session(request)
+
+
 def create_session(request: SessionCreateRequest | None = None) -> dict[str, Any]:
     requested_city = request.city if request else None
     city = load_city(requested_city or active_city().slug)
@@ -199,6 +207,15 @@ def ready_event(session: TerminalSession) -> dict[str, Any]:
 
 @app.websocket("/sessions/{session_id}")
 async def websocket_session(websocket: WebSocket, session_id: str) -> None:
+    await _websocket_session(websocket, session_id)
+
+
+@app.websocket("/terminal/sessions/{session_id}")
+async def terminal_websocket_session(websocket: WebSocket, session_id: str) -> None:
+    await _websocket_session(websocket, session_id)
+
+
+async def _websocket_session(websocket: WebSocket, session_id: str) -> None:
     session = _sessions.get(session_id)
     if session is None:
         await websocket.close(code=4404)

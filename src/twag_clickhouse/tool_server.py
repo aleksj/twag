@@ -174,7 +174,7 @@ def main() -> None:
 
     uvicorn.run(
         "twag_clickhouse.tool_server:app",
-        host=os.getenv("NYTW_TOOL_HOST", "0.0.0.0"),
+        host=os.getenv("NYTW_TOOL_HOST", "localhost"),
         port=int(os.getenv("NYTW_TOOL_PORT", "8000")),
         reload=os.getenv("NYTW_TOOL_RELOAD", "").lower() in {"1", "true", "yes"},
         access_log=_env_bool("NYTW_TOOL_ACCESS_LOG", False),

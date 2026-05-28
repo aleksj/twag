@@ -20,6 +20,8 @@ from .config import ClickHouseConfig
 DEFAULT_SUBCONSCIOUS_BASE_URL = "https://api.subconscious.dev/v1"
 DEFAULT_SUBCONSCIOUS_MODEL = "subconscious/tim-qwen3.6-27b"
 TokenUsageCallback = Callable[[dict[str, Any]], None]
+DEFAULT_EVENT_PAGE_SIZE = 25
+MAX_EVENT_PAGE_SIZE = 100
 
 FORBIDDEN_SQL = re.compile(
     r"\b("
@@ -502,11 +504,15 @@ def extract_embedded_tool_calls(content: str) -> list[dict[str, Any]]:
     return calls
 
 
-def requested_event_limit(question: str, default: int = 5) -> int:
-    match = re.search(r"\b(?:top|best|first|show|list|recommend)\s+(\d{1,2})\b", question, re.I)
+def requested_event_limit(
+    question: str,
+    default: int = DEFAULT_EVENT_PAGE_SIZE,
+    maximum: int = MAX_EVENT_PAGE_SIZE,
+) -> int:
+    match = re.search(r"\b(?:top|best|first|show|list|recommend)\s+(\d+)\b", question, re.I)
     if not match:
         return default
-    return max(1, min(int(match.group(1)), 10))
+    return max(1, min(int(match.group(1)), maximum))
 
 
 def likely_event_list_question(question: str) -> bool:

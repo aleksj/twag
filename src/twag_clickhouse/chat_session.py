@@ -19,21 +19,19 @@ from .subconscious_agent import (
 DEFAULT_STATUS_STEP_LIMIT = 8
 LOGGER = logging.getLogger(__name__)
 AGENT_NOT_CONFIGURED_REPLY = (
-    "TWAG search is unavailable right now. Check the local operator logs, "
-    "then try again."
+    "TWAG search is unavailable right now. Please try again later."
 )
 AGENT_INTERNAL_ERROR_REPLY = (
-    "TWAG search hit an internal error while answering. Check the local "
-    "operator logs, then try again."
+    "TWAG search hit an internal error while answering. Please try again later."
 )
 CONFIGURATION_ERROR_MARKERS = (
     "SUBCONSCIOUS_API_KEY is required",
     "CLICKHOUSE_HOST is required",
     "CLICKHOUSE_PASSWORD or CLICKHOUSE_API_KEY is required",
 )
-SPONSOR_LINE = (
-    "**Sponsored by data.flowers** - the data excellence company.\n"
-    "Want to sponsor TechWeek AI search? Contact info@data.flowers"
+SPONSOR_LINE = os.getenv(
+    "TWAG_SPONSOR_LINE",
+    "**Sponsored by Data.Flowers** - https://data.flowers/",
 )
 SUBJECTIVE_QUESTION_PATTERN = re.compile(
     r"\b("
@@ -161,8 +159,9 @@ def help_reply(*, presentation: ChatPresentation = DEFAULT_PRESENTATION) -> str:
         "`/quiet` - show only result updates and final answers\n\n"
         "Use concrete criteria like topic, date, neighborhood, host, capacity, "
         "RSVP status, or time.\n\n"
-        "Built by Aleks Jakulin ([@aleksj](https://x.com/aleksj)) and Nate Aune ([@natea](https://x.com/natea)), "
-        "with contributions from [@Stage11](https://github.com/Stage-11-Agentics/nytw-2026-for-agents)."
+        "Built by [Aleks](https://github.com/aleksj) and "
+        "[Nate Aune](https://github.com/natea), with contributions from "
+        "[Atin](https://github.com/AtinAtinAtin)."
     )
 
 
@@ -373,7 +372,7 @@ def answer_session_message(
             )
         except Exception as exc:
             return agent_error_reply(exc)
-        return answer + map_link_line(state.active_question or text, presentation=presentation)
+        return answer
 
     if progress:
         progress(f"Handing the request to the {active_city().short_name} search pipeline.")
@@ -388,6 +387,4 @@ def answer_session_message(
         )
     except Exception as exc:
         return agent_error_reply(exc)
-    if likely_event_list_question(text):
-        answer = answer + map_link_line(text, presentation=presentation)
     return answer

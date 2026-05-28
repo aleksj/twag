@@ -127,8 +127,9 @@ def test_extract_embedded_tool_calls_recovers_json_tool_content() -> None:
 
 def test_requested_event_limit_reads_top_n() -> None:
     assert requested_event_limit("top 3 AI agent orchestration events") == 3
-    assert requested_event_limit("best 50 events") == 10
-    assert requested_event_limit("AI events") == 5
+    assert requested_event_limit("best 50 events") == 50
+    assert requested_event_limit("best 200 events") == 100
+    assert requested_event_limit("AI events") == 25
 
 
 def test_build_keyword_event_query_is_limited_and_targets_nytw_events() -> None:
@@ -147,7 +148,7 @@ def test_build_keyword_event_query_is_limited_and_targets_nytw_events() -> None:
 def test_build_keyword_event_query_supports_offset() -> None:
     sql = build_keyword_event_query("list events involving running", offset=5)
 
-    assert "LIMIT 5" in sql
+    assert "LIMIT 25" in sql
     assert "OFFSET 5" in sql
 
 
@@ -268,7 +269,7 @@ class RecordingClickHouse:
                 "description_excerpt": "Founders and operators meet over breakfast.",
                 "rsvp_url": f"https://partiful.com/e/uws-{index}",
             }
-            for index in range(1, 7)
+            for index in range(1, 28)
         ]
 
 
@@ -283,9 +284,9 @@ def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
 
     assert clickhouse.sql is not None
     assert "neighborhood ILIKE" in clickhouse.sql
-    assert "LIMIT 6" in clickhouse.sql
+    assert "LIMIT 26" in clickhouse.sql
     assert "Upper West Side Founder Breakfast 1" in answer
-    assert "Upper West Side Founder Breakfast 6" not in answer
+    assert "Upper West Side Founder Breakfast 26" not in answer
     assert "Send `more` for the next page" in answer
 
 

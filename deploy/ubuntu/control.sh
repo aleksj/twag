@@ -40,11 +40,11 @@ case "$ACTION" in
     echo "Boston systemd unit:"
     systemctl cat "twag-telegram-agent-boston@$SERVICE_USER.service"
     echo
-    echo "terminal systemd unit:"
+    echo "Terminal systemd unit:"
     systemctl cat "twag-terminal@$SERVICE_USER.service"
     echo
     echo "running processes:"
-    ps -eo pid,ppid,user,lstart,command | grep -E 'twag-telegram-agent|twag telegram-agent|twag-terminal-server|twag terminal-server' | grep -v grep || true
+    ps -eo pid,ppid,user,lstart,command | grep -E 'twag-telegram-agent|twag telegram-agent|twag-terminal-server' | grep -v grep || true
     echo
     echo "import diagnostics:"
     python_bin="$(pwd)/.venv/bin/python"
@@ -57,12 +57,14 @@ import sys
 
 import twag_clickhouse.client as client
 import twag_clickhouse.telegram_agent as telegram_agent
+import twag_clickhouse.terminal_server as terminal_server
 
 logger = logging.getLogger(client.CLICKHOUSE_HTTP_LOGGER)
 
 print("python:", sys.executable)
 print("client module:", client.__file__)
 print("telegram module:", telegram_agent.__file__)
+print("terminal module:", terminal_server.__file__)
 print("clickhouse logger:", client.CLICKHOUSE_HTTP_LOGGER)
 print("noise filters:", [type(filter_).__name__ for filter_ in logger.filters])
 print("noise warning:", client.CLICKHOUSE_NOISY_WARNING)
