@@ -96,6 +96,17 @@ function anchorNode(url, label = url) {
   return anchor;
 }
 
+function commandLinkNode(command, label = command) {
+  const normalized = String(command || '').trim();
+  if (!normalized) return document.createTextNode(label);
+
+  const anchor = document.createElement('a');
+  anchor.href = '#';
+  anchor.dataset.commandLink = encodeURIComponent(normalized);
+  anchor.textContent = label;
+  return anchor;
+}
+
 function commandLinkHtml(command, label = command) {
   const normalized = String(command || '').trim();
   if (!normalized) return escapeHtml(label);
@@ -138,9 +149,25 @@ function markdownToHtml(text) {
   return html;
 }
 
-function linkifyTextNode(node) {
+function codeNode(code) {
+  if (code.trim().toLowerCase() === 'more') {
+    return commandLinkNode('more', code);
+  }
+
+  const element = document.createElement('code');
+  element.textContent = code;
+  return element;
+}
+
+function strongNode(text) {
+  const element = document.createElement('strong');
+  element.textContent = text;
+  return element;
+}
+
+function formatTextNode(node) {
   const text = node.nodeValue || '';
-  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<]+)/g;
+  const pattern = /`([^`\n]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*\n][\s\S]*?[^*\n])\*\*|(https?:\/\/[^\s<]+)/g;
   let lastIndex = 0;
   let match;
   const fragment = document.createDocumentFragment();
@@ -148,10 +175,14 @@ function linkifyTextNode(node) {
   while ((match = pattern.exec(text)) !== null) {
     fragment.append(document.createTextNode(text.slice(lastIndex, match.index)));
 
-    if (match[1] && match[2]) {
-      fragment.append(anchorNode(match[2], match[1]));
+    if (match[1]) {
+      fragment.append(codeNode(match[1]));
+    } else if (match[2] && match[3]) {
+      fragment.append(anchorNode(match[3], match[2]));
+    } else if (match[4]) {
+      fragment.append(strongNode(match[4]));
     } else {
-      const bareMatch = match[3] || '';
+      const bareMatch = match[5] || '';
       const trailing = bareMatch.match(/[),.;:!?]+$/)?.[0] || '';
       const url = trailing ? bareMatch.slice(0, -trailing.length) : bareMatch;
       fragment.append(anchorNode(url));
@@ -166,14 +197,14 @@ function linkifyTextNode(node) {
   node.replaceWith(fragment);
 }
 
-function linkifyContentInPlace(root) {
+function formatContentInPlace(root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const textNodes = [];
   while (walker.nextNode()) {
     textNodes.push(walker.currentNode);
   }
   for (const node of textNodes) {
-    linkifyTextNode(node);
+    formatTextNode(node);
   }
 }
 
@@ -422,11 +453,11 @@ function connect(session, options = {}) {
         const currentText = content.textContent || '';
         if (raw.startsWith(currentText)) {
           content.append(document.createTextNode(raw.slice(currentText.length)));
-          linkifyContentInPlace(content);
+          formatContentInPlace(content);
         } else if (currentText !== raw) {
           content.innerHTML = markdownToHtml(raw);
         } else {
-          linkifyContentInPlace(content);
+          formatContentInPlace(content);
         }
         state.draftNode = null;
         if (shouldScroll) scrollTranscriptToBottom();
