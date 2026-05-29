@@ -16,7 +16,7 @@ dependencies = [
 [project.scripts]
 twag = "twag_clickhouse.cli:main"
 twag-clickhouse = "twag_clickhouse.cli:main"
-twag-nytw-tool-server = "twag_clickhouse.tool_server:main"
+twag-sync-agent = "twag_clickhouse.tool_server:main"
 twag-telegram-agent = "twag_clickhouse.telegram_agent:main"
 twag-terminal-server = "twag_clickhouse.terminal_server:main"
 

@@ -13,7 +13,7 @@ Sponsored by [Data.Flowers](https://data.flowers/).
 ## Credits
 
 - **[Atin Woodard from Stage11](https://github.com/Stage-11-Agentics/)** started the agent-friendly NY Tech Week database.
-- **[Aleks Jakulin from Data.Flowers](https://github.com/aleksj)** started on the end-user product, wiring ClickHouse, Nimble, Telegram, deployment, and production hardening pieces together.
+- **[Aleks Jakulin from Data.Flowers](https://github.com/aleksj)** started on the end-user product, wiring ClickHouse, Telegram, deployment, and production hardening pieces together.
 - **[Nate Aune](https://github.com/natea)** ported the experience to Boston, rebuilt the static map/gallery navigation, and pushed the multi-city direction.
 
 ## Try It
@@ -52,14 +52,17 @@ flowchart LR
   F --> G
 
   B --> H["ClickHouse city tables<br/>nytw_* / bostw_*"]
-  I["Senso knowledge base"] --> J["Nimble sync loop<br/>skip unchanged downloads"]
+  I["Senso knowledge base"] --> J["Sync agent<br/>skip unchanged downloads"]
   J --> K["ClickHouse senso_* tables"]
+  A --> P["Sync agent<br/>direct Playwright + Partiful"]
+  P --> H
+  P --> Q["ClickHouse sync logs<br/>*_sync_runs / *_sync_changes"]
 
   H --> L["TWAG agent<br/>event search + guarded SQL"]
   K --> L
   L --> M["Telegram bots<br/>@Twagbot / @TwagBostonBot"]
   L --> N["Subconscious hosted runs"]
-  O["Nimble tool server"] --> H
+  O["ClickHouse tool server"] --> H
   N --> O
 ```
 
@@ -121,7 +124,7 @@ TELEGRAM_REQUEST_TIMEOUT=45
 
 Define one token per city. `TWAG_CITY=nyc` reads `NYC_TELEGRAM_BOT_TOKEN`; `TWAG_CITY=boston` reads `BOSTON_TELEGRAM_BOT_TOKEN`. In production, run only one polling process per Telegram token.
 
-Optional Senso and Nimble settings:
+Optional Senso and sync-agent settings:
 
 ```bash
 SENSO_API_KEY=
@@ -129,11 +132,18 @@ SENSO_SYNC_ENABLED=true
 SENSO_SYNC_INTERVAL_SECONDS=3600
 SENSO_SYNC_REPLACE=false
 
+TECHWEEK_CALENDAR_SYNC_ENABLED=true
+TECHWEEK_CALENDAR_SYNC_CITIES=nyc,boston
+TECHWEEK_CALENDAR_SYNC_INTERVAL_SECONDS=21600
+TECHWEEK_EVENT_FETCH_CONCURRENCY=3
+TECHWEEK_CALENDAR_MAX_SCROLL_TICKS=260
+TECHWEEK_CALENDAR_PAGE_DELAY_SECONDS=0.1
+
 NYTW_TOOL_URL=
 NYTW_TOOL_TOKEN=
 NYTW_TOOL_HOST=localhost
 NYTW_TOOL_PORT=8000
-TWAG_NIMBLE_COMMAND=.venv/bin/twag-nytw-tool-server
+TWAG_SYNC_AGENT_COMMAND=.venv/bin/twag-sync-agent
 ```
 
 ### Load And Inspect Data
@@ -147,9 +157,16 @@ twag --city boston inspect-nytw --limit 5
 
 twag sync-senso
 twag sync-senso-log --limit 5 --item-limit 50
+twag sync-calendars --cities nyc,boston
+twag sync-calendar-log --limit 5 --item-limit 50
 ```
 
 The Senso sync stores remote metadata and content hashes so repeated runs can skip files that have not changed.
+The calendar sync uses the public Tech Week calendar API plus gentle Partiful
+detail fetches, not Nimble. It writes append-only snapshots into
+`nytw_calendar_events` / `bostw_calendar_events`, exposes the latest complete
+run through `nytw_current_events` / `bostw_current_events`, and records
+row-level changes in `nytw_sync_changes` and `bostw_sync_changes`.
 
 ### Build Maps And Galleries
 
@@ -181,14 +198,14 @@ TWAG_CITY=boston TELEGRAM_AGENT_LOCK_FILE=.telegram-agent-boston.lock twag teleg
 ```
 
 On Ubuntu, the deploy scripts install separate systemd units for both bots,
-Nimble, and the browser terminal backend:
+the sync agent, and the browser terminal backend:
 
 ```bash
 RUN_REMOTE_INSTALL=true deploy/ubuntu/rsync.privileged.sh
 
 sudo systemctl enable --now twag-telegram-agent@$USER.service
 sudo systemctl enable --now twag-telegram-agent-boston@$USER.service
-sudo systemctl enable --now twag-nimble@$USER.service
+sudo systemctl enable --now twag-sync-agent@$USER.service
 sudo systemctl enable --now twag-terminal@$USER.service
 
 deploy/ubuntu/control.sh status
@@ -204,7 +221,7 @@ Useful logs:
 ```bash
 journalctl -u twag-telegram-agent@$USER.service -f
 journalctl -u twag-telegram-agent-boston@$USER.service -f
-journalctl -u twag-nimble@$USER.service -f
+journalctl -u twag-sync-agent@$USER.service -f
 journalctl -u twag-terminal@$USER.service -f
 ```
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-command="${TWAG_NIMBLE_COMMAND:-.venv/bin/twag-nytw-tool-server}"
+command="${TWAG_SYNC_AGENT_COMMAND:-.venv/bin/twag-sync-agent}"
 
 exec /bin/bash -lc "exec $command"

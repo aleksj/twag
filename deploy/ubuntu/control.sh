@@ -15,13 +15,13 @@ case "$ACTION" in
   start|stop|restart|status)
     sudo systemctl "$ACTION" "twag-telegram-agent@$SERVICE_USER.service"
     sudo systemctl "$ACTION" "twag-telegram-agent-boston@$SERVICE_USER.service"
-    sudo systemctl "$ACTION" "twag-nimble@$SERVICE_USER.service"
+    sudo systemctl "$ACTION" "twag-sync-agent@$SERVICE_USER.service"
     sudo systemctl "$ACTION" "twag-terminal@$SERVICE_USER.service"
     ;;
   logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
       -u "twag-telegram-agent-boston@$SERVICE_USER.service" \
-      -u "twag-nimble@$SERVICE_USER.service" \
+      -u "twag-sync-agent@$SERVICE_USER.service" \
       -u "twag-terminal@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   telegram-logs)
@@ -34,8 +34,8 @@ case "$ACTION" in
   boston-telegram-logs)
     journalctl -u "twag-telegram-agent-boston@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
-  nimble-logs)
-    journalctl -u "twag-nimble@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
+  sync-agent-logs|nimble-logs)
+    journalctl -u "twag-sync-agent@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   terminal-logs)
     journalctl -u "twag-terminal@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
@@ -63,8 +63,11 @@ case "$ACTION" in
     echo "Terminal systemd unit:"
     systemctl cat "twag-terminal@$SERVICE_USER.service"
     echo
+    echo "Sync-agent systemd unit:"
+    systemctl cat "twag-sync-agent@$SERVICE_USER.service"
+    echo
     echo "running processes:"
-    ps -eo pid,ppid,user,lstart,command | grep -E 'twag-telegram-agent|twag telegram-agent|twag-terminal-server' | grep -v grep || true
+    ps -eo pid,ppid,user,lstart,command | grep -E 'twag-telegram-agent|twag telegram-agent|twag-terminal-server|twag-sync-agent' | grep -v grep || true
     echo
     echo "import diagnostics:"
     python_bin="$(pwd)/.venv/bin/python"
@@ -101,7 +104,7 @@ Usage:
   deploy/ubuntu/control.sh telegram-logs
   deploy/ubuntu/control.sh ny-telegram-logs
   deploy/ubuntu/control.sh boston-telegram-logs
-  deploy/ubuntu/control.sh nimble-logs
+  deploy/ubuntu/control.sh sync-agent-logs
   deploy/ubuntu/control.sh terminal-logs
   deploy/ubuntu/control.sh nginx-diagnose
   deploy/ubuntu/control.sh diagnose

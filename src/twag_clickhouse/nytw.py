@@ -154,11 +154,11 @@ def extract_description(markdown_body: str) -> str:
     return match.group(1).strip()
 
 
-def parse_event_file(path: Path, source_dir: Path) -> dict[str, Any]:
-    raw = path.read_text(encoding="utf-8")
+def parse_event_markdown(raw: str, *, source_path: str = "") -> dict[str, Any]:
     match = FRONTMATTER_RE.match(raw)
     if not match:
-        raise ValueError(f"Missing YAML frontmatter in {path}")
+        location = f" in {source_path}" if source_path else ""
+        raise ValueError(f"Missing YAML frontmatter{location}")
 
     frontmatter = parse_frontmatter(match.group(1))
     markdown_body = match.group(2).strip()
@@ -171,7 +171,7 @@ def parse_event_file(path: Path, source_dir: Path) -> dict[str, Any]:
 
     return {
         "event_id": as_string(frontmatter.get("event_id")),
-        "source_path": str(path.relative_to(source_dir)),
+        "source_path": source_path,
         "title": as_string(frontmatter.get("title")),
         "event_date": event_date,
         "day": as_string(frontmatter.get("day")),
@@ -212,6 +212,11 @@ def parse_event_file(path: Path, source_dir: Path) -> dict[str, Any]:
         "frontmatter_json": json.dumps(frontmatter, sort_keys=True, default=str),
         "raw_markdown": raw,
     }
+
+
+def parse_event_file(path: Path, source_dir: Path) -> dict[str, Any]:
+    raw = path.read_text(encoding="utf-8")
+    return parse_event_markdown(raw, source_path=str(path.relative_to(source_dir)))
 
 
 EVENT_COLUMNS = [

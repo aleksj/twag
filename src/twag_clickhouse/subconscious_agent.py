@@ -36,7 +36,7 @@ LIMIT_PATTERN = re.compile(r"\blimit\b", re.IGNORECASE)
 def _agent_table_pattern(prefix: str) -> re.Pattern[str]:
     return re.compile(
         rf"\b("
-        rf"{prefix}_(events|hosts|event_hosts|manifest)|"
+        rf"{prefix}_(current_events|current_manifest|calendar_events|calendar_manifest|events|hosts|event_hosts|manifest)|"
         r"senso_(kb_nodes|kb_documents|kb_chunks|sync_runs)"
         r")\b",
         re.IGNORECASE,
@@ -120,7 +120,7 @@ Do not invent event data. Query the database first, then answer from the rows.
 
 Available ClickHouse tables:
 
-{prefix}_events:
+{prefix}_current_events:
 - event_id, title, event_date, day, start_time, end_time, start_at, end_at
 - host, neighborhood, venue_name, venue_address
 - rsvp_url, public_short_url, google_maps
@@ -130,6 +130,10 @@ Available ClickHouse tables:
 - canceled_at, canceled_by, cancellation_message
 - description, markdown_body, frontmatter_json, raw_markdown
 
+{prefix}_events:
+- static seed event table retained for fallback/back-compat. Prefer
+  {prefix}_current_events for current calendar data.
+
 {prefix}_hosts:
 - user_id, name, bio, bio_visibility, photo, is_managed, on_partiful
 - socials_json, tags, raw_json
@@ -137,7 +141,7 @@ Available ClickHouse tables:
 {prefix}_event_hosts:
 - event_id, user_id, host_position, is_platform_admin
 
-{prefix}_manifest:
+{prefix}_current_manifest:
 - event_id, url, title, host, date_time, neighborhood, badges, source, raw_json
 
 senso_kb_nodes:
@@ -156,8 +160,8 @@ senso_sync_runs:
 
 Important query rules:
 - Event queries are primary. For event discovery, ranking, counts, schedules,
-  capacity, venue, host, RSVP, or neighborhood questions, query {prefix}_* tables
-  first and prefer {prefix}_* over Senso.
+  capacity, venue, host, RSVP, or neighborhood questions, query
+  {prefix}_current_events first and prefer {prefix}_* over Senso.
 - Use reasoning only to decide what information to retrieve and how to query it.
   Do not spend reasoning tokens on prose style, formatting, or how to phrase the
   final response.
@@ -697,7 +701,7 @@ SELECT
     coalesce(venue_address, ''), ' ',
     arrayStringConcat(badges, ' ')
   ) AS retrieval_text
-FROM {active_city().table_prefix}_events
+FROM {active_city().table_prefix}_current_events
 WHERE fetch_status = 'ok'
   AND NOT canceled
 {availability_filter}

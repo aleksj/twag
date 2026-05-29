@@ -132,10 +132,10 @@ def test_requested_event_limit_reads_top_n() -> None:
     assert requested_event_limit("AI events") == 25
 
 
-def test_build_keyword_event_query_is_limited_and_targets_nytw_events() -> None:
+def test_build_keyword_event_query_is_limited_and_targets_current_events() -> None:
     sql = build_keyword_event_query("top 3 AI agent orchestration events")
 
-    assert "FROM nytw_events" in sql
+    assert "FROM nytw_current_events" in sql
     assert "event_id" in sql
     assert "count() OVER () AS total_matches" in sql
     assert "LIMIT 3" in sql

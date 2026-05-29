@@ -11,6 +11,12 @@ except ImportError:
     load_dotenv = None
 
 from .city import active_city, load_city
+from .calendar_sync import (
+    CalendarSyncConfig,
+    DEFAULT_CITIES,
+    calendar_sync_overview,
+    sync_configured_calendars,
+)
 from .client import ClickHouseService
 from .cloud import ClickHouseCloudClient, ClickHouseCloudConfig
 from .conversation import AgentConversation
@@ -109,6 +115,40 @@ def sync_senso_log(args: argparse.Namespace) -> int:
     _print_json(
         senso_sync_overview(
             _service(),
+            limit=args.limit,
+            item_limit=args.item_limit,
+        )
+    )
+    return 0
+
+
+def sync_calendars(args: argparse.Namespace) -> int:
+    city_slugs = tuple(
+        slug.strip().lower()
+        for slug in (args.cities or ",".join(DEFAULT_CITIES)).split(",")
+        if slug.strip()
+    )
+    config = CalendarSyncConfig(
+        city_slugs=city_slugs,
+        interval_seconds=0,
+        include_invite_only=args.include_invite_only,
+        fetch_concurrency=args.fetch_concurrency,
+        batch_size=args.batch_size,
+        fetch_timeout_seconds=args.fetch_timeout_seconds,
+        max_scroll_ticks=args.max_scroll_ticks,
+        scroll_delay_seconds=args.scroll_delay_seconds,
+        page_delay_seconds=args.page_delay_seconds,
+    )
+    _print_json({"synced": sync_configured_calendars(_service(), config)})
+    return 0
+
+
+def sync_calendar_log(args: argparse.Namespace) -> int:
+    city_slugs = tuple(slug.strip().lower() for slug in args.cities.split(",") if slug.strip())
+    _print_json(
+        calendar_sync_overview(
+            _service(),
+            city_slugs=city_slugs,
             limit=args.limit,
             item_limit=args.item_limit,
         )
@@ -388,6 +428,81 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync_senso_log_parser.set_defaults(func=sync_senso_log)
 
+    sync_calendars_parser = subparsers.add_parser(
+        "sync-calendars",
+        help="Crawl NYC/Boston Tech Week calendars and refresh ClickHouse event tables",
+    )
+    sync_calendars_parser.add_argument(
+        "--cities",
+        default="nyc,boston",
+        help="Comma-separated city slugs to sync (default: nyc,boston)",
+    )
+    sync_calendars_parser.add_argument(
+        "--include-invite-only",
+        action="store_true",
+        help="Include invite-only calendar rows. Default matches the published dataset convention.",
+    )
+    sync_calendars_parser.add_argument(
+        "--fetch-concurrency",
+        type=int,
+        default=3,
+        help="Concurrent direct Partiful detail fetches",
+    )
+    sync_calendars_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="Rows to insert per ClickHouse batch",
+    )
+    sync_calendars_parser.add_argument(
+        "--fetch-timeout-seconds",
+        type=float,
+        default=25.0,
+        help="Timeout for each direct Partiful detail fetch",
+    )
+    sync_calendars_parser.add_argument(
+        "--max-scroll-ticks",
+        type=int,
+        default=260,
+        help="Maximum browser scroll ticks per calendar pass",
+    )
+    sync_calendars_parser.add_argument(
+        "--scroll-delay-seconds",
+        type=float,
+        default=0.35,
+        help="Delay between fallback browser calendar scroll ticks",
+    )
+    sync_calendars_parser.add_argument(
+        "--page-delay-seconds",
+        type=float,
+        default=0.1,
+        help="Delay between Tech Week calendar API page requests",
+    )
+    sync_calendars_parser.set_defaults(func=sync_calendars)
+
+    sync_calendar_log_parser = subparsers.add_parser(
+        "sync-calendar-log",
+        help="Show recent Tech Week calendar sync runs and row-level changes",
+    )
+    sync_calendar_log_parser.add_argument(
+        "--cities",
+        default="nyc,boston",
+        help="Comma-separated city slugs to inspect",
+    )
+    sync_calendar_log_parser.add_argument(
+        "--limit",
+        type=int,
+        default=1,
+        help="Number of recent sync runs per city to show",
+    )
+    sync_calendar_log_parser.add_argument(
+        "--item-limit",
+        type=int,
+        default=25,
+        help="Maximum changed rows to include",
+    )
+    sync_calendar_log_parser.set_defaults(func=sync_calendar_log)
+
     deploy_agent_parser = subparsers.add_parser(
         "deploy-nytw-agent",
         help="Create a hosted Subconscious run that uses a public NYTW ClickHouse tool",
@@ -396,7 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy_agent_parser.add_argument(
         "--tool-url",
         default=None,
-        help="Public HTTPS base URL for twag-nytw-tool-server, without /query",
+        help="Public HTTPS base URL for twag-sync-agent, without /query",
     )
     deploy_agent_parser.add_argument(
         "--tool-token",

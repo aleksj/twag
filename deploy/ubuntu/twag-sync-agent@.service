@@ -1,5 +1,5 @@
 [Unit]
-Description=TWAG Nimble process (%i)
+Description=TWAG sync agent (%i)
 After=network-online.target
 Wants=network-online.target
 
@@ -9,10 +9,14 @@ User=%i
 Group=%i
 WorkingDirectory=__APP_DIR__
 EnvironmentFile=/etc/twag/twag.env
-ExecStart=__APP_DIR__/deploy/ubuntu/run-nimble.sh
+ExecStart=__APP_DIR__/deploy/ubuntu/run-sync-agent.sh
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
+Nice=10
+CPUQuota=75%
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 
 NoNewPrivileges=true
 PrivateTmp=true

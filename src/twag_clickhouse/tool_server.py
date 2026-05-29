@@ -20,12 +20,14 @@ except ImportError as exc:  # pragma: no cover - exercised only when deps missin
 
 from .client import ClickHouseService
 from .config import ClickHouseConfig
+from .calendar_sync import CalendarSyncConfig, sync_configured_calendars
 from .senso import SensoConfig, SensoService, sleep_before_next_sync, sync_senso_kb
 from .subconscious_agent import add_default_limit, validate_nytw_query
 
 
 logger = logging.getLogger(__name__)
-_sync_thread_started = False
+_senso_sync_thread_started = False
+_calendar_sync_thread_started = False
 UVICORN_SCANNER_NOISE = "Invalid HTTP request received."
 
 
@@ -109,15 +111,41 @@ def _run_senso_sync_loop() -> None:
 
 @app.on_event("startup")
 def start_senso_sync() -> None:
-    global _sync_thread_started
-    if _sync_thread_started:
+    global _senso_sync_thread_started
+    if _senso_sync_thread_started:
         return
     if not _env_bool("SENSO_SYNC_ENABLED", True):
         return
     if not os.getenv("SENSO_API_KEY", "").strip():
         return
-    _sync_thread_started = True
+    _senso_sync_thread_started = True
     thread = threading.Thread(target=_run_senso_sync_loop, daemon=True)
+    thread.start()
+
+
+def _run_calendar_sync_loop() -> None:
+    config = CalendarSyncConfig.from_env()
+    while True:
+        try:
+            result = sync_configured_calendars(_service(), config)
+            logger.info("Tech Week calendar ClickHouse sync complete: %s", result)
+        except Exception:
+            logger.exception("Tech Week calendar ClickHouse sync failed")
+
+        if config.interval_seconds <= 0:
+            return
+        sleep_before_next_sync(config.interval_seconds)
+
+
+@app.on_event("startup")
+def start_calendar_sync() -> None:
+    global _calendar_sync_thread_started
+    if _calendar_sync_thread_started:
+        return
+    if not _env_bool("TECHWEEK_CALENDAR_SYNC_ENABLED", True):
+        return
+    _calendar_sync_thread_started = True
+    thread = threading.Thread(target=_run_calendar_sync_loop, daemon=True)
     thread.start()
 
 
@@ -132,6 +160,10 @@ def root() -> dict[str, Any]:
     return {
         "ok": True,
         "service": "NYTechWeek ClickHouse Tool",
+        "sync": {
+            "calendar": "TECHWEEK_CALENDAR_SYNC_ENABLED",
+            "senso": "SENSO_SYNC_ENABLED",
+        },
         "endpoints": {
             "health": "/health",
             "query": "/query",
