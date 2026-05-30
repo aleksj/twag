@@ -300,7 +300,35 @@ SQL construction rules for event-search questions:
   the SQL against {prefix}_sync_changes / {prefix}_sync_runs directly. Use
   record_id as the event id, table_name = '{prefix}_events' when the user wants
   event-level changes, and convert relative windows such as "yesterday" or
-  "last 7 days" into concrete synced_at filters.
+  "last 7 days" into concrete synced_at filters. Prefer a concrete UTC
+  toDateTime64(...) timestamp/date boundary over now() - INTERVAL so queries
+  are reproducible from the current local context.
+
+Change-history query examples:
+- User asks: "what changed in the last two days?"
+  Good SQL pattern:
+  SELECT
+    record_id AS event_id,
+    title,
+    change_type,
+    changed_fields,
+    synced_at,
+    count() OVER () AS total_matches
+  FROM {prefix}_sync_changes
+  WHERE table_name = '{prefix}_events'
+    AND synced_at >= toDateTime64('<concrete UTC timestamp from current local context>', 3, 'UTC')
+    AND change_type IN ('inserted', 'updated', 'removed')
+  ORDER BY synced_at DESC, title ASC
+  LIMIT 25
+- User asks: "events added since yesterday"
+  Use change_type = 'inserted' and a concrete synced_at lower bound at the
+  start of the inferred local day converted to UTC.
+- User asks: "removed or cancelled events"
+  Use: AND (change_type = 'removed' OR has(changed_fields, 'canceled') OR has(changed_fields, 'canceled_at')).
+- Avoid this pattern for change-history queries:
+  synced_at >= now() - INTERVAL 2 DAY ... LIMIT 100.
+  It hides the timezone boundary, is hard to evaluate later, and skips the
+  total_matches pagination contract.
 
 Text matching pattern for event retrieval:
 - Keep SQL succinct. Avoid CTEs, nested SELECTs, repeated OR ladders, scoring
@@ -429,7 +457,8 @@ Important query rules:
 - For change/history queries, use *_sync_changes. Event-level changes use
   table_name = '{prefix}_events' and record_id as the event id. Join or
   follow up against *_current_events only when the final answer needs current
-  event date, venue, or RSVP fields.
+  event date, venue, or RSVP fields. Include count() OVER () AS total_matches
+  and use LIMIT 25 unless the user asks for a specific count/page size.
 - Use reasoning only to decide what information to retrieve and how to query it.
   Do not spend reasoning tokens on prose style, formatting, or how to phrase the
   final response.
@@ -556,6 +585,10 @@ def build_query_tool(city: CityConfig | None = None) -> dict[str, Any]:
                             "and bostw_current_events only when the user asks across cities. "
                             "For event search, build the SQL yourself with explicit WHERE "
                             "filters for dates, weekday abbreviations, locations, and time windows. "
+                            "For change/history questions, query sync_changes with record_id AS event_id, "
+                            "table_name = '<prefix>_events', concrete toDateTime64 UTC synced_at "
+                            "bounds, count() OVER () AS total_matches, and LIMIT 25; avoid "
+                            "now() - INTERVAL and LIMIT 100. "
                             "For topic search: put hard filters in WHERE, build topic terms "
                             "only from topic words and synonyms, keep SQL succinct, use one "
                             "multiSearchAnyCaseInsensitive(concatWithSeparator(...), [...]) predicate across "

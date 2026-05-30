@@ -379,6 +379,14 @@ The browser terminal keeps lightweight session snapshots in
 backend restart. The default deployed path is
 `/var/log/twag/terminal-sessions`.
 
+The terminal backend also writes per-turn JSONL traces to
+`TWAG_TERMINAL_TRACE_DIR` for later debugging and evaluation. These traces can
+include hidden planning/detail streams, ClickHouse SQL detail callbacks,
+visible answer deltas, route metadata, mode flags, token usage, and the final
+answer. They are not shown in the terminal unless verbose output is enabled.
+The default deployed path is `/var/log/twag/terminal-traces`; cap each record
+with `TWAG_TERMINAL_TRACE_CHAR_LIMIT`.
+
 Set `TWAG_PUBLIC_TERMINAL_BASE_URL` to the public terminal backend URL, for
 example `https://data.flowers/tw/terminal`. Filtered terminal search-result
 maps remain disabled by default with `TWAG_TERMINAL_RESULT_MAPS_ENABLED=false`

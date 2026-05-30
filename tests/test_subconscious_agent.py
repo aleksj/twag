@@ -146,6 +146,13 @@ def test_system_prompt_includes_current_local_date_context() -> None:
     assert "ORDER BY event_date ASC, start_at ASC, title ASC" in prompt
     assert "Do not match filler words" in prompt
     assert "The current schema does not provide embedding vectors" in prompt
+    assert "Change-history query examples:" in prompt
+    assert 'User asks: "what changed in the last two days?"' in prompt
+    assert "record_id AS event_id" in prompt
+    assert "count() OVER () AS total_matches" in prompt
+    assert "concrete UTC timestamp from current local context" in prompt
+    assert "Avoid this pattern for change-history queries:" in prompt
+    assert "synced_at >= now() - INTERVAL 2 DAY ... LIMIT 100" in prompt
 
 
 def test_query_tool_guides_llm_to_current_views_and_cross_city_union() -> None:
@@ -162,6 +169,9 @@ def test_query_tool_guides_llm_to_current_views_and_cross_city_union() -> None:
     assert "concatWithSeparator" in sql_description
     assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql_description
     assert "Do not invent search_text" in sql_description
+    assert "concrete toDateTime64 UTC synced_at" in sql_description
+    assert "count() OVER () AS total_matches" in sql_description
+    assert "avoid now() - INTERVAL and LIMIT 100" in sql_description
 
 
 def test_final_format_prompt_preserves_event_page() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import html
 import json
 import logging
@@ -99,6 +100,26 @@ def terminal_session_dir() -> pathlib.Path | None:
         return pathlib.Path(raw) if raw else None
     default = pathlib.Path("/var/log/twag/terminal-sessions")
     return default if default.parent.is_dir() else None
+
+
+def terminal_trace_dir() -> pathlib.Path | None:
+    raw = os.getenv("TWAG_TERMINAL_TRACE_DIR")
+    if raw is not None:
+        raw = raw.strip()
+        return pathlib.Path(raw) if raw else None
+    default = pathlib.Path("/var/log/twag/terminal-traces")
+    return default if default.parent.is_dir() else None
+
+
+def terminal_trace_char_limit() -> int:
+    raw = os.getenv("TWAG_TERMINAL_TRACE_CHAR_LIMIT", "").strip()
+    if not raw:
+        return 250_000
+    try:
+        return max(10_000, int(raw))
+    except ValueError:
+        LOGGER.warning("Ignoring invalid TWAG_TERMINAL_TRACE_CHAR_LIMIT=%r", raw)
+        return 250_000
 
 
 def terminal_agent_max_turns() -> int:
@@ -257,6 +278,86 @@ app = FastAPI(
 _sessions: dict[str, TerminalSession] = {}
 _states: dict[str, ChatState] = {}
 _city_lock = threading.Lock()
+
+
+@dataclass
+class TerminalTraceRecorder:
+    session: TerminalSession
+    user_text: str
+    trace_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    events: list[dict[str, Any]] = field(default_factory=list)
+    truncated: bool = False
+    _chars: int = 0
+
+    def add(self, event_type: str, text: str = "", **fields: Any) -> None:
+        if text is None:
+            text = ""
+        text = str(text)
+        limit = terminal_trace_char_limit()
+        if self._chars >= limit:
+            self.truncated = True
+            return
+        remaining = limit - self._chars
+        if len(text) > remaining:
+            text = text[:remaining]
+            self.truncated = True
+        self._chars += len(text)
+        event = {
+            "type": event_type,
+            "elapsed_ms": int(
+                (datetime.now(timezone.utc) - self.started_at).total_seconds() * 1000
+            ),
+        }
+        if text:
+            event["text"] = text
+        event.update({key: value for key, value in fields.items() if value is not None})
+        self.events.append(event)
+
+    def write(
+        self,
+        *,
+        question_text: str,
+        route: str,
+        answer: str,
+        usage: dict[str, Any],
+        status: str,
+        duration_ms: int,
+        error: str | None = None,
+    ) -> None:
+        directory = terminal_trace_dir()
+        if directory is None:
+            return
+        record = {
+            "version": 1,
+            "trace_id": self.trace_id,
+            "session_id": self.session.session_id,
+            "city": self.session.city,
+            "started_at": self.started_at.isoformat(),
+            "duration_ms": duration_ms,
+            "status": status,
+            "route": route,
+            "user_text": self.user_text,
+            "question_text": question_text,
+            "answer": answer,
+            "usage": usage,
+            "modes": {
+                "verbose": self.session.verbose_output,
+                "thinking": self.session.thinking_enabled,
+            },
+            "backend_status": self.session.backend_status,
+            "truncated": self.truncated,
+            "events": self.events,
+        }
+        if error:
+            record["error"] = error
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{self.session.session_id}.jsonl"
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            LOGGER.exception("Could not persist terminal trace")
 
 
 def _session_path(session_id: str) -> pathlib.Path | None:
@@ -976,9 +1077,13 @@ def _answer_in_thread(
     answer = ""
     started_at = time.monotonic()
     last_status_step: str | None = None
+    trace = TerminalTraceRecorder(session=session, user_text=text)
+    question_text = text
+    route = question_log_route(text)
 
     def emit_status(step: str) -> None:
         nonlocal last_status_step
+        trace.add("status", step)
         display_step = terminal_status_step(step)
         if not display_step or display_step == last_status_step:
             return
@@ -996,14 +1101,20 @@ def _answer_in_thread(
 
     def visible_stream(partial: str) -> None:
         if partial:
+            trace.add("visible_delta", partial)
             emit({"type": "delta", "text": partial, "mode": "append"})
 
-    def detail_stream(chunk: str) -> None:
+    def detail_stream(chunk: str, *, source: str = "detail") -> None:
         if chunk:
-            emit({"type": "detail_delta", "text": chunk, "expanded": False})
+            trace.add(f"{source}_delta", chunk)
+            if session.verbose_output:
+                emit({"type": "detail_delta", "text": chunk, "expanded": False})
 
     def raw_stream(chunk: str) -> None:
-        detail_stream(chunk)
+        detail_stream(chunk, source="raw")
+
+    def planning_stream(chunk: str) -> None:
+        detail_stream(chunk, source="planning")
 
     try:
         with _city_lock:
@@ -1019,10 +1130,24 @@ def _answer_in_thread(
                             "duration_ms": int((time.monotonic() - started_at) * 1000),
                         }
                     )
+                    trace.write(
+                        question_text=text,
+                        route=question_log_route(text),
+                        answer=answer,
+                        usage=usage.as_dict(),
+                        status="final",
+                        duration_ms=int((time.monotonic() - started_at) * 1000),
+                    )
                     return
                 agent_text = _terminal_map_command_search_query(text)
                 question_text = agent_text or text
                 route, first_step = answer_route(question_text, state)
+                trace.add(
+                    "route",
+                    route,
+                    question_text=question_text,
+                    command_text=text if agent_text else None,
+                )
                 uses_clickhouse = route.startswith("ClickHouse")
                 uses_model = route == "ClickHouse agent query"
                 update_chat_status(
@@ -1048,11 +1173,11 @@ def _answer_in_thread(
                     stream_callback=visible_stream,
                     raw_stream_callback=(
                         raw_stream
-                        if session.verbose_output and session.thinking_enabled
+                        if session.thinking_enabled
                         else None
                     ),
-                    planning_stream_callback=raw_stream if session.verbose_output else None,
-                    detail_callback=detail_stream if session.verbose_output else None,
+                    planning_stream_callback=planning_stream,
+                    detail_callback=detail_stream,
                     token_usage_callback=usage.add,
                 )
                 map_link = _terminal_map_link(session)
@@ -1071,27 +1196,48 @@ def _answer_in_thread(
                     _set_backend_service(session, "subconscious", "configured")
                 if uses_clickhouse or uses_model:
                     emit(_backend_status_event(session))
+        final_text = terminal_final_message_text(answer)
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         emit(
             {
                 "type": "final",
-                "text": terminal_final_message_text(answer),
+                "text": final_text,
                 "route": question_log_route(text),
                 "usage": usage.as_dict(),
-                "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "duration_ms": duration_ms,
             }
         )
-    except Exception:
+        trace.write(
+            question_text=question_text,
+            route=route,
+            answer=final_text,
+            usage=usage.as_dict(),
+            status="final",
+            duration_ms=duration_ms,
+        )
+    except Exception as exc:
         LOGGER.exception("Unhandled terminal session error")
         _set_backend_service(session, "clickhouse", "error")
         _set_backend_service(session, "subconscious", "error")
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         emit(_backend_status_event(session))
         emit(
             {
                 "type": "error",
                 "error": INTERNAL_TERMINAL_ERROR_REPLY,
                 "route": question_log_route(text),
-                "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "duration_ms": duration_ms,
             }
+        )
+        trace.add("exception", str(exc))
+        trace.write(
+            question_text=question_text,
+            route=route,
+            answer="",
+            usage=usage.as_dict(),
+            status="error",
+            duration_ms=duration_ms,
+            error=INTERNAL_TERMINAL_ERROR_REPLY,
         )
     finally:
         clear_chat_status(state)

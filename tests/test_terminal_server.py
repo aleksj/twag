@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from urllib.parse import quote
 
@@ -229,7 +230,8 @@ def test_answer_in_thread_does_not_emit_thinking_stream_by_default(monkeypatch) 
         def ask(self, question, **kwargs):
             assert kwargs.get("enable_thinking") is False
             assert kwargs.get("raw_stream_callback") is None
-            assert kwargs.get("planning_stream_callback") is None
+            assert callable(kwargs.get("planning_stream_callback"))
+            assert callable(kwargs.get("detail_callback"))
             kwargs["stream_callback"]("Answer")
             return "Answer"
 
@@ -254,8 +256,10 @@ def test_answer_in_thread_can_enable_thinking_without_showing_it(monkeypatch) ->
     class Agent:
         def ask(self, question, **kwargs):
             assert kwargs.get("enable_thinking") is True
-            assert kwargs.get("raw_stream_callback") is None
-            assert kwargs.get("planning_stream_callback") is None
+            assert callable(kwargs.get("raw_stream_callback"))
+            assert callable(kwargs.get("planning_stream_callback"))
+            assert callable(kwargs.get("detail_callback"))
+            kwargs["raw_stream_callback"]("<think>hidden plan</think>")
             kwargs["stream_callback"]("Answer")
             return "Answer"
 
@@ -269,6 +273,51 @@ def test_answer_in_thread_can_enable_thinking_without_showing_it(monkeypatch) ->
         event for event in events if event is not None and event["type"] == "detail_delta"
     ]
     assert detail_events == []
+
+
+def test_answer_in_thread_persists_backend_trace_without_showing_it(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("TWAG_TERMINAL_TRACE_DIR", str(tmp_path))
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            kwargs["progress_callback"]("Choosing the smallest useful data query.")
+            kwargs["planning_stream_callback"]("<think>build sql</think>")
+            kwargs["detail_callback"]("ClickHouse SQL executed.\n\nSELECT 1\n")
+            kwargs["raw_stream_callback"]("<think>raw reasoning</think>")
+            kwargs["stream_callback"]("Answer")
+            return "Answer"
+
+    session = TerminalSession(session_id="trace-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    session.thinking_enabled = True
+    events = []
+
+    _answer_in_thread(session, "what changed in the last two days?", events.append)
+
+    typed_events = [event for event in events if event is not None]
+    assert not any(event["type"] == "detail_delta" for event in typed_events)
+    assert typed_events[-1]["type"] == "final"
+    trace_path = tmp_path / "trace-session.jsonl"
+    record = json.loads(trace_path.read_text(encoding="utf-8").strip())
+    assert record["session_id"] == "trace-session"
+    assert record["user_text"] == "what changed in the last two days?"
+    assert record["answer"] == "Answer"
+    assert record["modes"] == {"verbose": False, "thinking": True}
+    trace_events = record["events"]
+    assert any(
+        event["type"] == "planning_delta" and "build sql" in event["text"]
+        for event in trace_events
+    )
+    assert any(
+        event["type"] == "detail_delta" and "SELECT 1" in event["text"]
+        for event in trace_events
+    )
+    assert any(
+        event["type"] == "raw_delta" and "raw reasoning" in event["text"]
+        for event in trace_events
+    )
 
 
 def test_answer_in_thread_can_use_verbose_output_without_thinking(monkeypatch) -> None:
