@@ -154,6 +154,56 @@ PLACEHOLDER_OUTPUT_PATTERN = re.compile(
     r"\brsvp\d+\b",
     re.IGNORECASE,
 )
+LOCATION_PREPOSITION_PATTERN = re.compile(r"\b(?:near|around|by|at)\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class GeoEntity:
+    label: str
+    neighborhood: str
+    patterns: tuple[str, ...]
+
+
+GEO_ENTITIES_BY_CITY: dict[str, tuple[GeoEntity, ...]] = {
+    "nyc": (
+        GeoEntity(
+            label="Columbia University",
+            neighborhood="upper manhattan",
+            patterns=(
+                r"\bcolumbia\s+university\b",
+                r"\bcolumbia\s+business\s+school\b",
+                r"\bcolumbia\b",
+            ),
+        ),
+        GeoEntity(
+            label="NYU",
+            neighborhood="greenwich village",
+            patterns=(
+                r"\bnyu\b",
+                r"\bnew\s+york\s+university\b",
+            ),
+        ),
+    ),
+    "boston": (
+        GeoEntity(
+            label="Harvard",
+            neighborhood="cambridge",
+            patterns=(
+                r"\bharvard\s+square\b",
+                r"\bharvard\s+university\b",
+                r"\bharvard\b",
+            ),
+        ),
+        GeoEntity(
+            label="MIT",
+            neighborhood="cambridge",
+            patterns=(
+                r"\bmit\b",
+                r"\bmassachusetts\s+institute\s+of\s+technology\b",
+            ),
+        ),
+    ),
+}
 
 _SYSTEM_PROMPT_TEMPLATE = """
 You are {agent_name}, a data analyst for the {display_name}
@@ -176,6 +226,11 @@ or "Upper West Side", use a hard neighborhood/venue/address filter; do not
 treat the neighborhood words as only loose ranking terms. For time windows use
 start_at: morning is 05:00-11:59, afternoon is 12:00-16:59, and evening/tonight
 is 17:00 or later.
+For landmark or campus requests such as "near Columbia University", localize
+the named place to its surrounding event neighborhood first, then search inside
+that neighborhood instead of matching the place name as loose title text. Known
+examples: Columbia University -> Upper Manhattan; NYU -> Greenwich Village;
+Harvard, Harvard Square, and MIT -> Cambridge.
 
 Use the {tool_name} tool whenever the user asks for facts, counts,
 rankings, filtering, recommendations, or analysis that depends on the data.
@@ -660,12 +715,16 @@ def event_search_text(question: str) -> str:
     text = OPEN_RSVP_PATTERN.sub(" ", question)
     text = RSVP_LINK_PHRASE_PATTERN.sub(" ", text)
     city = active_city()
+    entity = infer_event_geo_entity(text, city)
+    if entity:
+        text = _remove_geo_entity_text(text, entity)
     text = _location_pattern(city.neighborhoods_regex).sub(" ", text)
     text = ISO_DATE_PATTERN.sub(" ", text)
     text = MONTH_DAY_PATTERN.sub(" ", text)
     text = RELATIVE_DATE_PATTERN.sub(" ", text)
     text = WEEKDAY_PATTERN.sub(" ", text)
     text = TIME_OF_DAY_PATTERN.sub(" ", text)
+    text = LOCATION_PREPOSITION_PATTERN.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -733,6 +792,21 @@ def _clickhouse_array(values: list[str]) -> str:
     return "[" + ", ".join(_clickhouse_string(value) for value in values) + "]"
 
 
+def infer_event_geo_entity(question: str, city: CityConfig | None = None) -> GeoEntity | None:
+    city = city or active_city()
+    for entity in GEO_ENTITIES_BY_CITY.get(city.slug, ()):
+        if any(re.search(pattern, question, re.IGNORECASE) for pattern in entity.patterns):
+            return entity
+    return None
+
+
+def _remove_geo_entity_text(question: str, entity: GeoEntity) -> str:
+    text = question
+    for pattern in entity.patterns:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    return text
+
+
 def _event_query_base_date(city: CityConfig) -> date:
     override = os.getenv("TWAG_CURRENT_DATE", "").strip()
     if override:
@@ -776,6 +850,9 @@ def infer_event_query_date(question: str, city: CityConfig | None = None) -> str
 
 def infer_event_query_neighborhood(question: str, city: CityConfig | None = None) -> str:
     city = city or active_city()
+    entity = infer_event_geo_entity(question, city)
+    if entity:
+        return entity.neighborhood
     match = _location_pattern(city.neighborhoods_regex).search(question)
     if not match:
         return ""

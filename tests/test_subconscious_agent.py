@@ -18,6 +18,7 @@ from twag_clickhouse.subconscious_agent import (
     extract_embedded_tool_calls,
     format_event_rows,
     infer_event_query_date,
+    infer_event_geo_entity,
     is_more_results_request,
     likely_event_list_question,
     likely_nytw_data_question,
@@ -197,6 +198,29 @@ def test_build_keyword_event_query_hard_filters_neighborhood_weekday_and_time(
     assert "%tuesday%" not in sql
     assert "%morning%" not in sql
     assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql
+
+
+def test_build_keyword_event_query_localizes_known_geo_entities() -> None:
+    entity = infer_event_geo_entity("events near Columbia University")
+    sql = build_keyword_event_query("events near Columbia University")
+
+    assert entity is not None
+    assert entity.neighborhood == "upper manhattan"
+    assert "neighborhood ILIKE '%upper manhattan%'" in sql
+    assert "WITH\n  [] AS query_terms" in sql
+    assert "%near%" not in sql
+    assert "%columbia%" not in sql
+    assert "%university%" not in sql
+    assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql
+
+
+def test_build_keyword_event_query_combines_topic_with_geo_entity() -> None:
+    sql = build_keyword_event_query("ai events near Columbia University")
+
+    assert "neighborhood ILIKE '%upper manhattan%'" in sql
+    assert "%ai%" in sql
+    assert "%columbia%" not in sql
+    assert "ORDER BY relevance_score DESC" in sql
 
 
 def test_expanded_keyword_terms_handles_running() -> None:
