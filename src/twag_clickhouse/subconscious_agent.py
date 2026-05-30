@@ -306,8 +306,12 @@ Answer contract:
 - Final answers only. Never reveal SQL planning, scratch work, tool-use notes,
   hidden reasoning, or implementation details.
 - Never print SQL unless the user explicitly asks for SQL.
-- For "top N", "best N", "recommend N", "list N", or event-search questions,
-  answer with exactly N bullets when N is stated, otherwise at most 5 bullets.
+- For "top N", "best N", "recommend N", or "list N" questions, answer with
+  exactly N event bullets when N is stated. For open-ended event-search
+  questions with no N, preserve the provided ranked result page instead of
+  hand-picking a smaller subset.
+- Keep result order from the data query. It is already ranked from most relevant
+  to least relevant or ordered by the requested structured filters.
 - Each event bullet must be one compact line:
   **Title** — date/time — venue or neighborhood — why it matches — RSVP URL.
 - For counts, answer in one sentence.
@@ -375,6 +379,8 @@ Do not reason about formatting. Apply the answer contract directly.
 Follow the answer contract exactly.
 If fewer rows are provided than requested, show all provided rows without
 apologizing. Do not invent missing events.
+If no explicit smaller N was requested, preserve the ranked page of event rows
+that was provided. Do not reduce it to a hand-picked top 5.
 """.strip()
 
 CONTINUE_TRUNCATED_PROMPT = """

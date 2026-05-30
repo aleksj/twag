@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from twag_clickhouse.city import BOSTON
 from twag_clickhouse.subconscious_agent import (
+    FINAL_FORMAT_PROMPT,
     NytwSubconsciousAgent,
     SubconsciousConfig,
     UnsafeQueryError,
@@ -99,6 +100,13 @@ def test_system_prompt_includes_current_local_date_context() -> None:
     assert 'Interpret relative dates like "today", "tomorrow"' in prompt
     assert "Placeholder content is invalid" in prompt
     assert "morning is 05:00-11:59" in prompt
+    assert "preserve the provided ranked result page" in prompt
+    assert "hand-picking a smaller subset" in prompt
+
+
+def test_final_format_prompt_preserves_ranked_event_page() -> None:
+    assert "preserve the ranked page of event rows" in FINAL_FORMAT_PROMPT
+    assert "Do not reduce it to a hand-picked top 5" in FINAL_FORMAT_PROMPT
 
 
 def test_placeholder_output_is_rejected() -> None:
