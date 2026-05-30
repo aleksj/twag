@@ -707,9 +707,9 @@ def _latest_senso_counts(service: ClickHouseService) -> dict[str, int]:
         rows = service.query(
             """
             SELECT
-              (SELECT count() FROM senso_kb_nodes) AS nodes,
-              (SELECT count() FROM senso_kb_documents) AS documents,
-              (SELECT count() FROM senso_kb_chunks) AS chunks
+              (SELECT uniqExact(kb_node_id) FROM senso_kb_nodes) AS nodes,
+              (SELECT uniqExact(kb_node_id) FROM senso_kb_documents) AS documents,
+              (SELECT uniqExact(tuple(kb_node_id, chunk_index)) FROM senso_kb_chunks) AS chunks
             """
         )
         if rows:
@@ -731,7 +731,7 @@ def _latest_senso_documents(service: ClickHouseService) -> dict[str, dict[str, A
           kb_node_id,
           argMax(title, synced_at) AS title,
           argMax(content_hash, synced_at) AS content_hash,
-          max(synced_at) AS synced_at
+          max(synced_at) AS latest_synced_at
         FROM senso_kb_documents
         GROUP BY kb_node_id
         """,
@@ -740,6 +740,8 @@ def _latest_senso_documents(service: ClickHouseService) -> dict[str, dict[str, A
     for row in rows:
         kb_node_id = str(row.get("kb_node_id") or "")
         if kb_node_id:
+            if "synced_at" not in row and "latest_synced_at" in row:
+                row = {**row, "synced_at": row.get("latest_synced_at")}
             documents[kb_node_id] = row
     return documents
 
@@ -758,7 +760,7 @@ def _latest_senso_nodes(service: ClickHouseService) -> dict[str, dict[str, Any]]
           argMax(version, synced_at) AS version,
           argMax(processing_status, synced_at) AS processing_status,
           argMax(raw_json, synced_at) AS raw_json,
-          max(synced_at) AS synced_at
+          max(synced_at) AS latest_synced_at
         FROM senso_kb_nodes
         GROUP BY kb_node_id
         """,
@@ -767,6 +769,8 @@ def _latest_senso_nodes(service: ClickHouseService) -> dict[str, dict[str, Any]]
     for row in rows:
         kb_node_id = str(row.get("kb_node_id") or "")
         if kb_node_id:
+            if "synced_at" not in row and "latest_synced_at" in row:
+                row = {**row, "synced_at": row.get("latest_synced_at")}
             nodes[kb_node_id] = row
     return nodes
 

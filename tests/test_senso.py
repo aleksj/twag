@@ -4,6 +4,8 @@ from typing import Any, Sequence
 
 from twag_clickhouse.senso import (
     SensoNode,
+    _latest_senso_documents,
+    _latest_senso_nodes,
     chunk_text,
     extract_senso_text,
     senso_sync_overview,
@@ -171,6 +173,48 @@ def test_sync_senso_kb_skips_content_download_when_node_metadata_is_unchanged() 
     assert second_senso.content_calls == 0
     assert second_senso.download_url_calls == 0
     assert second_senso.download_text_calls == 0
+
+
+def test_latest_senso_lookups_do_not_alias_aggregate_argument_name() -> None:
+    class CaptureClickHouse:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def query(self, sql: str, parameters: dict[str, Any] | None = None) -> list[dict]:
+            self.queries.append(sql)
+            if "FROM senso_kb_documents" in sql:
+                return [
+                    {
+                        "kb_node_id": "doc-1",
+                        "title": "Refund Policy",
+                        "content_hash": "hash-1",
+                        "latest_synced_at": "2026-05-30 19:30:00",
+                    }
+                ]
+            return [
+                {
+                    "kb_node_id": "doc-1",
+                    "parent_id": "folder-1",
+                    "path": "Policies/Refund Policy",
+                    "name": "Refund Policy",
+                    "node_type": "document",
+                    "content_id": "content-1",
+                    "version": None,
+                    "processing_status": "complete",
+                    "raw_json": "{}",
+                    "latest_synced_at": "2026-05-30 19:30:00",
+                }
+            ]
+
+    clickhouse = CaptureClickHouse()
+
+    documents = _latest_senso_documents(clickhouse)  # type: ignore[arg-type]
+    nodes = _latest_senso_nodes(clickhouse)  # type: ignore[arg-type]
+
+    assert documents["doc-1"]["synced_at"] == "2026-05-30 19:30:00"
+    assert nodes["doc-1"]["synced_at"] == "2026-05-30 19:30:00"
+    assert all("max(synced_at) AS synced_at" not in sql for sql in clickhouse.queries)
+    assert all("max(synced_at) AS latest_synced_at" in sql for sql in clickhouse.queries)
 
 
 def test_senso_sync_overview_reads_runs_and_changes() -> None:
