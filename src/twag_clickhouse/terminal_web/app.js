@@ -530,10 +530,8 @@ function connect(session, options = {}) {
         const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
         row.classList.remove('draft');
         content.dataset.raw = raw;
-        if (content.dataset.renderedRaw !== raw) {
-          content.innerHTML = markdownToHtml(raw);
-          content.dataset.renderedRaw = raw;
-        }
+        content.innerHTML = markdownToHtml(raw);
+        content.dataset.renderedRaw = raw;
         state.draftNode = null;
         if (shouldScroll) scrollTranscriptToBottom();
         else transcript.scrollTop = transcript.scrollHeight - beforeBottom;

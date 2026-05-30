@@ -924,7 +924,7 @@ def _answer_in_thread(
 
     def raw_stream(chunk: str) -> None:
         if chunk:
-            emit({"type": "thinking_delta", "text": chunk, "expanded": state.verbose})
+            emit({"type": "thinking_delta", "text": chunk, "expanded": False})
 
     try:
         with _city_lock:
@@ -967,7 +967,7 @@ def _answer_in_thread(
                     question_text,
                     progress=progress,
                     stream_callback=visible_stream,
-                    raw_stream_callback=raw_stream,
+                    raw_stream_callback=raw_stream if state.verbose else None,
                     token_usage_callback=usage.add,
                 )
                 map_link = _terminal_map_link(session)
