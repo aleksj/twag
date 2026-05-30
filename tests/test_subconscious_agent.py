@@ -13,6 +13,7 @@ from twag_clickhouse.subconscious_agent import (
     UnsafeQueryError,
     add_default_limit,
     build_event_change_query,
+    build_query_tool,
     build_system_prompt,
     build_keyword_event_query,
     clean_model_answer,
@@ -59,6 +60,17 @@ def test_validate_nytw_query_accepts_synced_senso_select() -> None:
     sql = validate_nytw_query("SELECT title FROM senso_kb_chunks LIMIT 10")
 
     assert sql.startswith("SELECT title")
+
+
+def test_validate_nytw_query_accepts_cross_city_union_select() -> None:
+    sql = validate_nytw_query(
+        "SELECT 'NYC' AS city, title FROM nytw_current_events "
+        "UNION ALL "
+        "SELECT 'Boston' AS city, title FROM bostw_current_events "
+        "LIMIT 10"
+    )
+
+    assert "bostw_current_events" in sql
 
 
 def test_validate_nytw_query_rejects_mutation() -> None:
@@ -114,6 +126,21 @@ def test_system_prompt_includes_current_local_date_context() -> None:
     assert "morning is 05:00-11:59" in prompt
     assert "preserve the provided ranked result page" in prompt
     assert "hand-picking a smaller subset" in prompt
+    assert "nytw_current_events and bostw_current_events" in prompt
+    assert "views already select the latest completed sync" in prompt
+    assert "UNION ALL matching SELECT lists" in prompt
+    assert "start_time is a display string" in prompt
+    assert "table_name = 'bostw_events'" in prompt
+    assert "senso_* only for general-purpose Tech Week context" in prompt
+
+
+def test_query_tool_guides_llm_to_current_views_and_cross_city_union() -> None:
+    tool = build_query_tool(BOSTON)
+    sql_description = tool["function"]["parameters"]["properties"]["sql"]["description"]
+
+    assert "nytw_* or bostw_*" in sql_description
+    assert "current_events views" in sql_description
+    assert "UNION ALL across nytw_current_events and bostw_current_events" in sql_description
 
 
 def test_final_format_prompt_preserves_ranked_event_page() -> None:
@@ -218,6 +245,21 @@ def test_build_keyword_event_query_hard_filters_neighborhood_weekday_and_time(
     assert "%tuesday%" not in sql
     assert "%morning%" not in sql
     assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql
+
+
+def test_build_keyword_event_query_treats_weekday_abbreviation_as_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-30")
+
+    sql = build_keyword_event_query("gaming events in flatiron on tue")
+
+    assert infer_event_query_date("gaming events in flatiron on tue") == "2026-06-02"
+    assert "event_date = '2026-06-02'" in sql
+    assert "neighborhood ILIKE '%flatiron%'" in sql
+    assert "['gaming'] AS query_terms" in sql
+    assert "%tue%" not in sql
+    assert "'gaming tue' AS query_phrase" not in sql
 
 
 def test_build_keyword_event_query_localizes_known_geo_entities() -> None:
@@ -434,12 +476,63 @@ class RecordingClickHouse:
         ]
 
 
-def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
+def test_agent_uses_llm_tool_call_for_plain_location_event_question() -> None:
     clickhouse = RecordingClickHouse()
-    agent = NytwSubconsciousAgent(
-        clickhouse=clickhouse,  # type: ignore[arg-type]
-        subconscious=SubconsciousConfig(api_key="test"),
-    )
+
+    class ToolCallingAgent(NytwSubconsciousAgent):
+        def __init__(self) -> None:
+            super().__init__(
+                clickhouse=clickhouse,  # type: ignore[arg-type]
+                subconscious=SubconsciousConfig(api_key="test"),
+            )
+            self.calls = 0
+
+        def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "query_nytw_clickhouse",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "sql": (
+                                                        "SELECT event_id, title, event_date, start_time, "
+                                                        "end_time, neighborhood, venue_name, rsvp_url, "
+                                                        "going_guest_count, description AS description_excerpt, "
+                                                        "count() OVER () AS total_matches "
+                                                        "FROM nytw_current_events "
+                                                        "WHERE fetch_status = 'ok' AND NOT canceled "
+                                                        "AND neighborhood ILIKE '%upper west side%' "
+                                                        "LIMIT 26"
+                                                    )
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Showing 1-25 of 72 matching events.",
+                        }
+                    }
+                ]
+            }
+
+    agent = ToolCallingAgent()
 
     answer = agent.ask("events in upper west side?")
 
@@ -447,16 +540,16 @@ def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
     assert "neighborhood ILIKE" in clickhouse.sql
     assert "LIMIT 26" in clickhouse.sql
     assert "count() OVER () AS total_matches" in clickhouse.sql
-    assert "Showing 1-25 of 72 matching events." in answer
-    assert "Upper West Side Founder Breakfast 1" in answer
-    assert "Upper West Side Founder Breakfast 26" not in answer
-    assert "Send `more` for the next page" in answer
+    assert answer == "Showing 1-25 of 72 matching events."
     assert [row["event_id"] for row in agent.last_event_map_rows] == [
         f"event-{index}" for index in range(1, 26)
     ]
+    assert agent.calls == 2
 
 
-def test_agent_routes_changed_since_yesterday_to_sync_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agent_uses_llm_tool_call_for_changed_since_yesterday(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-30")
 
     class ChangeClickHouse:
@@ -477,17 +570,69 @@ def test_agent_routes_changed_since_yesterday_to_sync_changes(monkeypatch: pytes
             ]
 
     clickhouse = ChangeClickHouse()
-    agent = NytwSubconsciousAgent(
-        clickhouse=clickhouse,  # type: ignore[arg-type]
-        subconscious=SubconsciousConfig(api_key="test"),
-    )
+
+    class ChangeToolCallingAgent(NytwSubconsciousAgent):
+        def __init__(self) -> None:
+            super().__init__(
+                clickhouse=clickhouse,  # type: ignore[arg-type]
+                subconscious=SubconsciousConfig(api_key="test"),
+            )
+            self.calls = 0
+
+        def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "query_nytw_clickhouse",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "sql": (
+                                                        "SELECT record_id AS event_id, title, "
+                                                        "change_type, changed_fields, synced_at, "
+                                                        "count() OVER () AS total_matches "
+                                                        "FROM nytw_sync_changes "
+                                                        "WHERE table_name = 'nytw_events' "
+                                                        "AND synced_at >= toDateTime64('2026-05-29 00:00:00', 3, 'UTC') "
+                                                        "AND change_type IN ('inserted', 'updated', 'removed') "
+                                                        "ORDER BY synced_at DESC, title ASC LIMIT 25"
+                                                    )
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Fresh event changed yesterday.",
+                        }
+                    }
+                ]
+            }
+
+    agent = ChangeToolCallingAgent()
 
     answer = agent.ask("what has changed from yesterday?")
 
     assert clickhouse.sql is not None
     assert "FROM nytw_sync_changes" in clickhouse.sql
     assert "2026-05-29 00:00:00" in clickhouse.sql
-    assert "Fresh event" in answer
+    assert answer == "Fresh event changed yesterday."
+    assert agent.calls == 2
 
 
 def test_agent_tool_query_compacts_large_rows() -> None:

@@ -32,6 +32,7 @@ OMITTED_TOOL_RESULT_FIELDS = {
     "content_json",
     "text",
 }
+TECH_WEEK_TABLE_PREFIXES = ("nytw", "bostw")
 
 FORBIDDEN_SQL = re.compile(
     r"\b("
@@ -44,9 +45,11 @@ FORBIDDEN_SQL = re.compile(
 READ_ONLY_START = re.compile(r"^\s*(select|with|show|describe|desc|explain)\b", re.IGNORECASE)
 LIMIT_PATTERN = re.compile(r"\blimit\b", re.IGNORECASE)
 def _agent_table_pattern(prefix: str) -> re.Pattern[str]:
+    allowed_prefixes = tuple(dict.fromkeys((prefix, *TECH_WEEK_TABLE_PREFIXES)))
+    prefix_group = "|".join(re.escape(value) for value in allowed_prefixes)
     return re.compile(
         rf"\b("
-        rf"{prefix}_(current_events|current_manifest|calendar_events|calendar_manifest|events|hosts|event_hosts|manifest|sync_changes)|"
+        rf"(?:{prefix_group})_(current_events|current_manifest|calendar_events|calendar_manifest|events|hosts|event_hosts|manifest|sync_changes|sync_runs)|"
         r"senso_(kb_nodes|kb_documents|kb_chunks|sync_runs)"
         r")\b",
         re.IGNORECASE,
@@ -142,9 +145,29 @@ RELATIVE_DATE_PATTERN = re.compile(
 )
 LAST_N_DAYS_PATTERN = re.compile(r"\blast\s+(\d{1,2})\s+days?\b", re.IGNORECASE)
 WEEKDAY_PATTERN = re.compile(
-    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    r"\b("
+    r"monday|mon|"
+    r"tuesday|tues|tue|"
+    r"wednesday|weds|wed|"
+    r"thursday|thurs|thu|"
+    r"friday|fri|"
+    r"saturday|sat|"
+    r"sunday|sun"
+    r")\.?(?=\s|$|[?,!])",
     re.IGNORECASE,
 )
+WEEKDAY_ALIASES = {
+    "mon": "monday",
+    "tue": "tuesday",
+    "tues": "tuesday",
+    "wed": "wednesday",
+    "weds": "wednesday",
+    "thu": "thursday",
+    "thurs": "thursday",
+    "fri": "friday",
+    "sat": "saturday",
+    "sun": "sunday",
+}
 WEEKDAY_NUM = {
     "monday": 0,
     "tuesday": 1,
@@ -226,10 +249,13 @@ Current local context:
 - Dataset event date range: {event_date_range}
 
 Interpret relative dates like "today", "tomorrow", "tonight", "this morning",
-"tomorrow morning", and weekdays relative to the current local date above. If a
-relative date falls inside the dataset range, query that concrete date instead
-of asking the user to clarify. Use event_date for dates and start_at/start_time
-for time-of-day filters like morning, afternoon, evening, or tonight.
+"tomorrow morning", and weekdays relative to the current local date above. This
+includes weekday abbreviations such as "mon", "tue", "tues", "wed", "thu",
+"thurs", "fri", "sat", and "sun"; treat them as date constraints, never as
+keyword terms. If a relative date falls inside the dataset range, query that
+concrete date instead of asking the user to clarify. Use event_date for dates
+and start_at/start_time for time-of-day filters like morning, afternoon,
+evening, or tonight.
 For weekday requests, compute the next matching weekday from the current local
 date. For neighborhood requests such as "East Village", "SoHo", "Cambridge",
 or "Upper West Side", use a hard neighborhood/venue/address filter; do not
@@ -242,6 +268,28 @@ that neighborhood instead of matching the place name as loose title text. Known
 examples: Columbia University -> Upper Manhattan; NYU -> Greenwich Village;
 Harvard, Harvard Square, and MIT -> Cambridge.
 
+SQL construction rules for event-search questions:
+- The model is responsible for building the ClickHouse SQL. Do not rely on
+  keyword-only matching when the user supplied structured constraints.
+- For list/recommend/find/top event questions, call the tool with a SELECT from
+  {prefix}_current_events and include: event_id, title, event_date, start_time,
+  end_time, neighborhood, venue_name, rsvp_url, going_guest_count, a compact
+  description excerpt, and count() OVER () AS total_matches.
+- Apply structured constraints in WHERE before ranking:
+  event_date for dates/weekdays/weekday abbreviations; start_at/toHour(start_at)
+  for morning/afternoon/evening; neighborhood/venue_name/venue_address for
+  locations. Example: "gaming events in flatiron on tue" means query_terms
+  should include gaming, WHERE should include the next Tuesday event_date and
+  Flatiron location filter, and "tue" must not be searched as text.
+- If the user asks for N results, use LIMIT N+1 so the app can know whether
+  another page exists. If no N is stated, use LIMIT 26. Include OFFSET only when
+  the conversation asks for the next page.
+- For "changed", "new", "removed", "updated", or "history" questions, build
+  the SQL against {prefix}_sync_changes / {prefix}_sync_runs directly. Use
+  record_id as the event id, table_name = '{prefix}_events' when the user wants
+  event-level changes, and convert relative windows such as "yesterday" or
+  "last 7 days" into concrete synced_at filters.
+
 Use the {tool_name} tool whenever the user asks for facts, counts,
 rankings, filtering, recommendations, or analysis that depends on the data.
 Do not invent event data. Query the database first, then answer from the rows.
@@ -252,10 +300,31 @@ the requested item.
 
 Available ClickHouse tables:
 
+Database structure:
+- The default ClickHouse database stores two Tech Week calendars with matching
+  schemas: New York uses nytw_* tables/views and Boston uses bostw_* tables/views.
+- The active/default city for this conversation is {display_name}, so use
+  {prefix}_* unless the user explicitly asks for Boston, New York, both cities,
+  or all Tech Week calendars.
+- Primary event query targets are current views: nytw_current_events and
+  bostw_current_events. These views already select the latest completed sync
+  run, so do not add run_id filters for normal current-calendar questions.
+- For cross-city event questions, UNION ALL matching SELECT lists from
+  nytw_current_events and bostw_current_events, include a literal city column,
+  and then ORDER/LIMIT the combined result.
+- Raw versioned tables are for reference/debugging: *_calendar_events and
+  *_calendar_manifest are keyed by run_id plus record id. Prefer current views
+  for user-facing event discovery, counts, schedules, venue, RSVP, capacity, and
+  neighborhood questions.
+
 {prefix}_current_events:
-- event_id, title, event_date, day, start_time, end_time, start_at, end_at
+- event_id: unique event identifier
+- title: event title; strong keyword signal
+- description: rich full description; best field for topic/semantic matching
+- event_date, day, start_time, end_time, start_at, end_at
 - host, neighborhood, venue_name, venue_address
-- rsvp_url, public_short_url, google_maps
+- rsvp_url, public_short_url, google_maps; use rsvp_url for event links and
+  public_short_url as a fallback link when needed
 - visibility, guest_action, fetch_status, at_capacity, is_capped, canceled
 - owner_count, going_guest_count, total_guest_count, approved_guest_count
 - max_capacity, remaining_capacity, badges, owner_ids
@@ -266,6 +335,10 @@ Available ClickHouse tables:
 - static seed event table retained for fallback/back-compat. Prefer
   {prefix}_current_events for current calendar data.
 
+{prefix}_calendar_events:
+- raw versioned event rows from sync runs; use only when the user asks about
+  a specific historical run or when debugging sync state.
+
 {prefix}_hosts:
 - user_id, name, bio, bio_visibility, photo, is_managed, on_partiful
 - socials_json, tags, raw_json
@@ -275,6 +348,10 @@ Available ClickHouse tables:
 
 {prefix}_current_manifest:
 - event_id, url, title, host, date_time, neighborhood, badges, source, raw_json
+
+{prefix}_sync_runs:
+- run_id, city_slug, calendar_url, started_at, finished_at, status, events,
+  manifest_events, changes, error
 
 {prefix}_sync_changes:
 - run_id, city_slug, table_name, change_type, record_id, title
@@ -298,6 +375,22 @@ Important query rules:
 - Event queries are primary. For event discovery, ranking, counts, schedules,
   capacity, venue, host, RSVP, or neighborhood questions, query
   {prefix}_current_events first and prefer {prefix}_* over Senso.
+- Always exclude canceled current events with NOT canceled or canceled = false.
+- For topic searches, match title, description, markdown_body, host, badges,
+  and optionally venue/neighborhood fields. Use description and markdown_body as
+  the richest text fields, but avoid SELECT * because they can be large.
+- Build broad topic queries with OR synonym blocks, and build multi-topic
+  intersections as separate AND blocks.
+- For dates use event_date or day. For chronological ordering, prefer start_at
+  when available; start_time is a display string and can sort poorly across
+  AM/PM boundaries.
+- For open RSVP questions, require a nonempty RSVP link and available capacity:
+  rsvp_url != '', NOT at_capacity, and remaining_capacity IS NULL OR
+  remaining_capacity > 0.
+- For change/history queries, use *_sync_changes. Event-level changes use
+  table_name = '{prefix}_events' and record_id as the event id. Join or
+  follow up against *_current_events only when the final answer needs current
+  event date, venue, or RSVP fields.
 - Use reasoning only to decide what information to retrieve and how to query it.
   Do not spend reasoning tokens on prose style, formatting, or how to phrase the
   final response.
@@ -306,8 +399,6 @@ Important query rules:
   background, or explanatory questions that the {prefix}_* event rows cannot
   answer.
 - Prefer live events: fetch_status = 'ok' AND NOT canceled.
-- For "open RSVP", "spots left", or "not full" questions, filter to events
-  with rsvp_url != '', NOT at_capacity, and remaining_capacity IS NULL or > 0.
 - Exclude the platform admin host when ranking real hosts:
   is_platform_admin = false.
 - Always include enough identifying context in final answers: title, date/time,
@@ -410,8 +501,8 @@ def build_query_tool(city: CityConfig | None = None) -> dict[str, Any]:
         "function": {
             "name": city.tool_name,
             "description": (
-                f"Run one read-only ClickHouse SQL query against {city.display_name} "
-                "event tables and synced Senso knowledge-base tables, then return JSON rows."
+                "Run one read-only ClickHouse SQL query against Tech Week event "
+                "tables/views and synced Senso knowledge-base tables, then return JSON rows."
             ),
             "parameters": {
                 "type": "object",
@@ -419,9 +510,13 @@ def build_query_tool(city: CityConfig | None = None) -> dict[str, Any]:
                     "sql": {
                         "type": "string",
                         "description": (
-                            f"A single read-only SQL statement using {city.table_prefix}_* "
-                            f"tables or synced senso_* tables. Use {city.table_prefix}_* "
-                            "first for event questions."
+                            "A single read-only SQL statement using nytw_* or bostw_* "
+                            f"event tables/views, or synced senso_* tables. Use {city.table_prefix}_* "
+                            "first for default event questions, current_events views for "
+                            "current calendar data, and UNION ALL across nytw_current_events "
+                            "and bostw_current_events only when the user asks across cities. "
+                            "For event search, build the SQL yourself with explicit WHERE "
+                            "filters for dates, weekday abbreviations, locations, and time windows."
                         ),
                     }
                 },
@@ -866,7 +961,8 @@ def infer_event_query_date(question: str, city: CityConfig | None = None) -> str
 
     weekday = WEEKDAY_PATTERN.search(question)
     if weekday:
-        target = WEEKDAY_NUM[weekday.group(1).lower()]
+        weekday_name = WEEKDAY_ALIASES.get(weekday.group(1).lower(), weekday.group(1).lower())
+        target = WEEKDAY_NUM[weekday_name]
         delta = (target - base_date.weekday()) % 7
         return (base_date + timedelta(days=delta)).isoformat()
 
@@ -1262,68 +1358,19 @@ class NytwSubconsciousAgent:
                 }
             )
         messages.append({"role": "user", "content": question})
-        response_parts: list[str] = []
-
-        if likely_event_change_question(question):
-            if progress_callback:
-                progress_callback("Checking recent event sync changes.")
-            sql = build_event_change_query(question, limit=requested_event_limit(question), offset=event_offset)
-            self.last_sql_queries.append(sql)
-            result = self._query_sql(sql, compact=False)
-            if detail_callback:
-                detail_callback(
-                    "Deterministic event change search selected.\n\n"
-                    f"{result.get('sql') or sql}\n"
-                )
-            if raw_stream_callback and enable_thinking:
-                raw_stream_callback("Deterministic event change search selected.\n")
-            since_date = infer_change_query_since_date(question, city)
-            return format_event_change_rows(result, since_date=since_date, offset=event_offset)
-
-        if likely_event_list_question(question):
+        if event_offset:
             page_size = requested_event_limit(question)
-            if progress_callback:
-                terms = status_query_terms(question)
-                if terms:
-                    progress_callback(f"Expanded search terms: {', '.join(terms)}.")
-                progress_callback(
-                    "Building a ranked event query across titles, descriptions, "
-                    "hosts, venues, and neighborhoods."
-                )
-            sql = build_keyword_event_query(
-                question,
-                limit=page_size + 1,
-                offset=event_offset,
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Pagination instruction: this is a follow-up page for the same "
+                        f"event-search request. Preserve the original constraints and ranking. "
+                        f"Use LIMIT {page_size + 1} OFFSET {event_offset} in the ClickHouse SQL."
+                    ),
+                }
             )
-            self.last_sql_queries.append(sql)
-            result = self._query_sql(sql, compact=False)
-            if detail_callback:
-                detail_callback(
-                    "Deterministic event search selected.\n\n"
-                    f"{result.get('sql') or sql}\n"
-                )
-            if raw_stream_callback and enable_thinking:
-                raw_stream_callback("Deterministic event search selected.\n")
-            if result.get("ok"):
-                self.last_event_map_rows = list((result.get("rows") or [])[:page_size])
-            if progress_callback:
-                if result.get("ok"):
-                    row_count = int(result.get("row_count") or len(result.get("rows") or []))
-                    visible = min(row_count, page_size)
-                    progress_callback(
-                        f"ClickHouse returned {row_count} candidate rows; "
-                        f"formatting {visible} result{'s' if visible != 1 else ''}."
-                    )
-                else:
-                    progress_callback(
-                        "ClickHouse returned an error; preparing the failure details."
-                    )
-            return format_event_rows(
-                result,
-                offset=event_offset,
-                page_size=page_size,
-                more_hint=True,
-            )
+        response_parts: list[str] = []
 
         for _ in range(max_turns):
             if progress_callback:
@@ -1605,7 +1652,14 @@ class NytwSubconsciousAgent:
             sql = args.get("sql", "")
             if sql:
                 self.last_sql_queries.append(str(sql))
-            return self._query_sql(sql, compact=True)
+            result = self._query_sql(sql, compact=True)
+            if result.get("ok"):
+                rows = result.get("rows") or []
+                if isinstance(rows, list) and any(isinstance(row, dict) and row.get("event_id") for row in rows):
+                    self.last_event_map_rows = [
+                        row for row in rows if isinstance(row, dict) and row.get("event_id")
+                    ][:MAX_TOOL_RESULT_ROWS]
+            return result
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
