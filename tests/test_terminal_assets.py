@@ -22,7 +22,15 @@ def test_terminal_index_uses_content_hashed_asset_urls() -> None:
     assert "ArrowUp" in app_js
     assert "ArrowDown" in app_js
     assert "detail_delta" in app_js
+    assert "detail_done" in app_js
+    assert "collapseDetail" in app_js
+    assert "content.innerHTML = markdownToHtml(raw)" in app_js
+    assert "\"mode\": \"replace\"" not in app_js
     assert "summary.textContent = 'detail'" in app_js
+    assert "appendMessage('detail'" not in app_js
+    css = (TERMINAL_WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    assert ".detail-details" in css
+    assert ".message.detail" not in css
     assert 'class="verbosity-switch"' in html
     assert 'data-mode="quiet"' in html
     assert 'data-mode="verbose"' in html

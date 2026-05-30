@@ -19,7 +19,7 @@ const state = {
   sessionId: '',
   city: '',
   draftNode: null,
-  detailNode: null,
+  detailBlock: null,
   detailRenderFrame: 0,
   draftRenderFrame: 0,
   operatorToken: '',
@@ -394,16 +394,41 @@ function appendMessage(role, text, className = '', options = {}) {
   return row;
 }
 
+function ensureDraftNode() {
+  if (!state.draftNode) {
+    state.draftNode = appendMessage('twag', '', 'draft', { forceScroll: transcriptIsNearBottom() });
+  }
+  return state.draftNode;
+}
+
+function ensureAnswerNode() {
+  const row = ensureDraftNode();
+  const content = row.querySelector('.content');
+  let answer = content.querySelector(':scope > .answer-content');
+  if (!answer) {
+    answer = document.createElement('div');
+    answer.className = 'answer-content';
+    const existingHtml = content.innerHTML;
+    const existingText = content.textContent || '';
+    content.innerHTML = '';
+    if (existingHtml && existingText.trim()) {
+      answer.innerHTML = existingHtml;
+    }
+    content.prepend(answer);
+  }
+  return answer;
+}
+
 function renderDraftNow() {
   if (!state.draftNode) return;
 
-  const content = state.draftNode.querySelector('.content');
+  const content = ensureAnswerNode();
   const raw = content.dataset.raw || '';
   if (content.dataset.renderedRaw === raw) return;
 
   const shouldScroll = transcriptIsNearBottom();
   const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
-  content.textContent = raw;
+  content.innerHTML = markdownToHtml(raw);
   content.dataset.renderedRaw = raw;
 
   if (shouldScroll) scrollTranscriptToBottom();
@@ -419,10 +444,7 @@ function scheduleDraftRender() {
 }
 
 function setDraft(text, mode) {
-  if (!state.draftNode) {
-    state.draftNode = appendMessage('twag', '', 'draft', { forceScroll: transcriptIsNearBottom() });
-  }
-  const content = state.draftNode.querySelector('.content');
+  const content = ensureAnswerNode();
   const previous = content.dataset.raw || '';
   const next = mode === 'append' ? previous + text : text;
   if (next === previous) return;
@@ -431,9 +453,9 @@ function setDraft(text, mode) {
 }
 
 function renderDetailNow() {
-  if (!state.detailNode) return;
+  if (!state.detailBlock) return;
 
-  const content = state.detailNode.querySelector('.detail-content');
+  const content = state.detailBlock.querySelector('.detail-content');
   const raw = content.dataset.raw || '';
   if (content.dataset.renderedRaw === raw) return;
 
@@ -455,10 +477,10 @@ function scheduleDetailRender() {
 }
 
 function appendDetail(text, expanded = false) {
-  if (!state.detailNode) {
-    const row = appendMessage('detail', '', 'detail', { forceScroll: transcriptIsNearBottom() });
+  if (!state.detailBlock) {
+    const row = ensureDraftNode();
     const content = row.querySelector('.content');
-    content.innerHTML = '';
+    ensureAnswerNode();
 
     const details = document.createElement('details');
     details.className = 'detail-details';
@@ -472,10 +494,10 @@ function appendDetail(text, expanded = false) {
 
     details.append(summary, pre);
     content.append(details);
-    state.detailNode = row;
+    state.detailBlock = details;
   }
 
-  const content = state.detailNode.querySelector('.detail-content');
+  const content = state.detailBlock.querySelector('.detail-content');
   const previous = content.dataset.raw || '';
   const next = previous + String(text || '');
   if (next === previous) return;
@@ -489,7 +511,18 @@ function finishDetail() {
     state.detailRenderFrame = 0;
     renderDetailNow();
   }
-  state.detailNode = null;
+  state.detailBlock = null;
+}
+
+function collapseDetail() {
+  if (state.detailRenderFrame) {
+    window.cancelAnimationFrame(state.detailRenderFrame);
+    state.detailRenderFrame = 0;
+    renderDetailNow();
+  }
+  if (state.detailBlock) {
+    state.detailBlock.open = false;
+  }
 }
 
 function clearDraft() {
@@ -650,6 +683,8 @@ function connect(session, options = {}) {
       setDraft(event.text || '', event.mode);
     } else if (event.type === 'detail_delta' || event.type === 'thinking_delta') {
       appendDetail(event.text || '', event.expanded);
+    } else if (event.type === 'detail_done') {
+      collapseDetail();
     } else if (event.type === 'final') {
       state.inFlightPrompt = '';
       finishDetail();
@@ -658,15 +693,18 @@ function connect(session, options = {}) {
         if (state.draftRenderFrame) {
           window.cancelAnimationFrame(state.draftRenderFrame);
           state.draftRenderFrame = 0;
+          renderDraftNow();
         }
         const row = state.draftNode;
-        const content = row.querySelector('.content');
+        const content = ensureAnswerNode();
         const raw = event.text || content.dataset.raw || '';
         const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
         row.classList.remove('draft');
         content.dataset.raw = raw;
-        content.innerHTML = markdownToHtml(raw);
-        content.dataset.renderedRaw = raw;
+        if (content.dataset.renderedRaw !== raw) {
+          content.innerHTML = markdownToHtml(raw);
+          content.dataset.renderedRaw = raw;
+        }
         state.draftNode = null;
         if (shouldScroll) scrollTranscriptToBottom();
         else transcript.scrollTop = transcript.scrollHeight - beforeBottom;

@@ -26,11 +26,14 @@ from twag_clickhouse.terminal_server import (
     ready_event,
     root,
     terminal_asset,
+    terminal_final_message_text,
     terminal_index,
+    terminal_message_limit,
     terminal_result_map,
     terminal_result_map_geojson,
     terminal_query_timeout_reply,
     terminal_query_timeout_summary,
+    terminal_status_step,
 )
 
 
@@ -50,6 +53,31 @@ def test_terminal_timeout_message_uses_human_elapsed_label() -> None:
     assert "after 0s" not in reply
     assert "after less than 1s" in reply
     assert summary == "Stopped after less than 1s. Try a narrower query."
+
+
+def test_terminal_message_limit_defaults_to_100k(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_TERMINAL_MESSAGE_LIMIT", raising=False)
+
+    assert terminal_message_limit() == 100_000
+    assert terminal_final_message_text("A" * 100_001).endswith(
+        "Narrow the query or ask for the next page.]"
+    )
+    assert len(terminal_final_message_text("A" * 100_001)) <= 100_000
+
+
+def test_terminal_status_step_describes_query_generation() -> None:
+    assert (
+        terminal_status_step(
+            "Choosing the smallest useful data query across NY Tech Week events and synced Senso context."
+        )
+        == "Generating a ClickHouse query."
+    )
+    assert (
+        terminal_status_step(
+            "Formatting the database rows into the final answer."
+        )
+        == "Composing the final answer."
+    )
 
 
 def test_terminal_server_serves_browser_terminal_assets() -> None:
@@ -201,6 +229,7 @@ def test_answer_in_thread_does_not_emit_thinking_stream_by_default(monkeypatch) 
         def ask(self, question, **kwargs):
             assert kwargs.get("enable_thinking") is False
             assert kwargs.get("raw_stream_callback") is None
+            assert kwargs.get("planning_stream_callback") is None
             kwargs["stream_callback"]("Answer")
             return "Answer"
 
@@ -214,6 +243,7 @@ def test_answer_in_thread_does_not_emit_thinking_stream_by_default(monkeypatch) 
     delta_events = [event for event in typed_events if event["type"] == "delta"]
     assert detail_events == []
     assert delta_events[-1]["text"] == "Answer"
+    assert delta_events[-1]["mode"] == "append"
     assert typed_events[-1]["type"] == "final"
     assert typed_events[-1]["text"] == "Answer"
 
@@ -225,6 +255,7 @@ def test_answer_in_thread_can_enable_thinking_without_showing_it(monkeypatch) ->
         def ask(self, question, **kwargs):
             assert kwargs.get("enable_thinking") is True
             assert kwargs.get("raw_stream_callback") is None
+            assert kwargs.get("planning_stream_callback") is None
             kwargs["stream_callback"]("Answer")
             return "Answer"
 
@@ -247,9 +278,11 @@ def test_answer_in_thread_can_use_verbose_output_without_thinking(monkeypatch) -
         def ask(self, question, **kwargs):
             assert kwargs.get("enable_thinking") is False
             assert kwargs.get("raw_stream_callback") is None
+            assert callable(kwargs.get("planning_stream_callback"))
             assert callable(kwargs.get("detail_callback"))
+            kwargs["planning_stream_callback"]("<think>planning sql</think>")
             kwargs["detail_callback"]("ClickHouse SQL executed.\n\nSELECT 1\n")
-            kwargs["progress_callback"]("Formatting the database rows into the final Telegram answer.")
+            kwargs["progress_callback"]("Formatting the database rows into the final answer.")
             kwargs["stream_callback"]("Answer")
             return "Answer"
 
@@ -263,13 +296,19 @@ def test_answer_in_thread_can_use_verbose_output_without_thinking(monkeypatch) -
         event for event in events if event is not None and event["type"] == "status"
     ]
     assert any(
-        event["text"] == "Formatting the database rows into the final Telegram answer."
+        event["text"] == "Composing the final answer."
         for event in status_events
     )
     detail_events = [
         event for event in events if event is not None and event["type"] == "detail_delta"
     ]
     assert detail_events[-1]["text"] == "ClickHouse SQL executed.\n\nSELECT 1\n"
+    assert any(
+        event["type"] == "detail_delta" and event["text"] == "<think>planning sql</think>"
+        for event in events
+        if event is not None
+    )
+    assert any(event is not None and event["type"] == "detail_done" for event in events)
 
 
 def test_answer_in_thread_emits_folded_detail_stream_when_both_modes_on(monkeypatch) -> None:
@@ -278,6 +317,7 @@ def test_answer_in_thread_emits_folded_detail_stream_when_both_modes_on(monkeypa
     class Agent:
         def ask(self, question, **kwargs):
             assert kwargs.get("enable_thinking") is True
+            assert callable(kwargs.get("planning_stream_callback"))
             kwargs["raw_stream_callback"]("<think>plan</think>")
             return "Answer"
 

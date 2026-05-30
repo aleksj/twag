@@ -247,7 +247,7 @@ def test_answer_message_with_status_shows_agent_search_stages():
             progress = kwargs["progress_callback"]
             progress("Expanded search terms: mathematics.")
             progress(
-                "Building a ranked event query across titles, descriptions, "
+                "Building an event query across titles, descriptions, "
                 "hosts, venues, and neighborhoods."
             )
             progress("ClickHouse returned 3 candidate rows; formatting 3 results.")
@@ -282,7 +282,7 @@ def test_answer_message_with_status_shows_agent_search_stages():
     status_updates = "\n".join(edit[2] for edit in telegram.edits)
     assert answer == "Here are the math events."
     assert "Expanded search terms: mathematics." in status_updates
-    assert "Building a ranked event query" in status_updates
+    assert "Building an event query" in status_updates
     assert "ClickHouse returned 3 candidate rows" in status_updates
 
 

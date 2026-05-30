@@ -415,7 +415,7 @@ def answer_route(text: str, state: ChatState) -> tuple[str, str]:
     if likely_event_list_question(text):
         return (
             "ClickHouse event search",
-            "Preparing a ranked event search across topic, location, venue, and host fields.",
+            "Preparing an event search across topic, location, venue, and host fields.",
         )
     return (
         "ClickHouse agent query",
@@ -456,6 +456,7 @@ def answer_session_message(
     progress: Callable[[str], None] | None = None,
     stream_callback: Callable[[str], None] | None = None,
     raw_stream_callback: Callable[[str], None] | None = None,
+    planning_stream_callback: Callable[[str], None] | None = None,
     detail_callback: Callable[[str], None] | None = None,
     enable_thinking: bool | None = None,
     token_usage_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -477,6 +478,7 @@ def answer_session_message(
             progress=progress,
             stream_callback=stream_callback,
             raw_stream_callback=raw_stream_callback,
+            planning_stream_callback=planning_stream_callback,
             detail_callback=detail_callback,
             enable_thinking=enable_thinking,
             token_usage_callback=token_usage_callback,
@@ -492,6 +494,7 @@ def _answer_session_message_in_active_city(
     progress: Callable[[str], None] | None = None,
     stream_callback: Callable[[str], None] | None = None,
     raw_stream_callback: Callable[[str], None] | None = None,
+    planning_stream_callback: Callable[[str], None] | None = None,
     detail_callback: Callable[[str], None] | None = None,
     enable_thinking: bool | None = None,
     token_usage_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -527,6 +530,7 @@ def _answer_session_message_in_active_city(
                 text,
                 token_usage_callback=token_usage_callback,
                 progress_callback=progress,
+                planning_stream_callback=planning_stream_callback,
                 detail_callback=detail_callback,
                 enable_thinking=enable_thinking,
                 no_previous_more_message="Ask an event-list question first, then send 'more'.",
@@ -543,6 +547,7 @@ def _answer_session_message_in_active_city(
             text,
             stream_callback=stream_callback,
             raw_stream_callback=raw_stream_callback,
+            planning_stream_callback=planning_stream_callback,
             detail_callback=detail_callback,
             enable_thinking=enable_thinking,
             token_usage_callback=token_usage_callback,

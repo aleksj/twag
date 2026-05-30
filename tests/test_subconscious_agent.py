@@ -13,6 +13,7 @@ from twag_clickhouse.subconscious_agent import (
     UnsafeQueryError,
     add_default_limit,
     build_event_change_query,
+    build_event_search_plan,
     build_query_tool,
     build_system_prompt,
     build_keyword_event_query,
@@ -27,12 +28,14 @@ from twag_clickhouse.subconscious_agent import (
     is_more_results_request,
     likely_event_change_question,
     likely_event_list_question,
+    likely_event_search_plan_question,
     likely_nytw_data_question,
     looks_like_planning_leak,
     merge_continued_text,
     placeholder_output_detected,
     response_was_truncated,
     requested_event_limit,
+    render_event_search_sql,
     validate_nytw_query,
     verified_answer_or_placeholder_warning,
     visible_stream_content,
@@ -124,7 +127,7 @@ def test_system_prompt_includes_current_local_date_context() -> None:
     assert 'Interpret relative dates like "today", "tomorrow"' in prompt
     assert "Placeholder content is invalid" in prompt
     assert "morning is 05:00-11:59" in prompt
-    assert "preserve the provided ranked result page" in prompt
+    assert "preserve the provided result page" in prompt
     assert "hand-picking a smaller subset" in prompt
     assert "nytw_current_events and bostw_current_events" in prompt
     assert "views already select the latest completed sync" in prompt
@@ -132,6 +135,17 @@ def test_system_prompt_includes_current_local_date_context() -> None:
     assert "start_time is a display string" in prompt
     assert "table_name = 'bostw_events'" in prompt
     assert "senso_* only for general-purpose Tech Week context" in prompt
+    assert "First identify hard filters" in prompt
+    assert "Only topic words\n  should become text-match terms" in prompt
+    assert "Keep SQL succinct" in prompt
+    assert "Use only the real columns listed below" in prompt
+    assert "Do not invent search_text, tags" in prompt
+    assert "Match topic words against title, description, markdown_body" in prompt
+    assert "one multiSearchAnyCaseInsensitive(concatWithSeparator" in prompt
+    assert "Simple recipe:" in prompt
+    assert "ORDER BY event_date ASC, start_at ASC, title ASC" in prompt
+    assert "Do not match filler words" in prompt
+    assert "The current schema does not provide embedding vectors" in prompt
 
 
 def test_query_tool_guides_llm_to_current_views_and_cross_city_union() -> None:
@@ -141,10 +155,17 @@ def test_query_tool_guides_llm_to_current_views_and_cross_city_union() -> None:
     assert "nytw_* or bostw_*" in sql_description
     assert "current_events views" in sql_description
     assert "UNION ALL across nytw_current_events and bostw_current_events" in sql_description
+    assert "put hard filters in WHERE" in sql_description
+    assert "topic terms only from topic words and synonyms" in sql_description
+    assert "keep SQL succinct" in sql_description
+    assert "multiSearchAnyCaseInsensitive" in sql_description
+    assert "concatWithSeparator" in sql_description
+    assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql_description
+    assert "Do not invent search_text" in sql_description
 
 
-def test_final_format_prompt_preserves_ranked_event_page() -> None:
-    assert "preserve the ranked page of event rows" in FINAL_FORMAT_PROMPT
+def test_final_format_prompt_preserves_event_page() -> None:
+    assert "preserve the page of event rows" in FINAL_FORMAT_PROMPT
     assert "Do not reduce it to a hand-picked top 5" in FINAL_FORMAT_PROMPT
 
 
@@ -203,11 +224,15 @@ def test_build_keyword_event_query_is_limited_and_targets_current_events() -> No
     assert "count() OVER () AS total_matches" in sql
     assert "LIMIT 3" in sql
     assert "orchestration" in sql
-    assert "neighborhood ILIKE" in sql
-    assert "venue_name ILIKE" in sql
-    assert "retrieval_text" in sql
-    assert "term_overlap" in sql
+    assert "multiSearchAnyCaseInsensitive" in sql
+    assert "concatWithSeparator" in sql
+    assert "neighborhood" in sql
+    assert "venue_name" in sql
     assert "arrayStringConcat(badges" in sql
+    assert "retrieval_context" not in sql
+    assert " OR " not in sql
+    assert "relevance_score" not in sql
+    assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql
 
 
 def test_build_keyword_event_query_supports_offset() -> None:
@@ -257,9 +282,8 @@ def test_build_keyword_event_query_treats_weekday_abbreviation_as_date(
     assert infer_event_query_date("gaming events in flatiron on tue") == "2026-06-02"
     assert "event_date = '2026-06-02'" in sql
     assert "neighborhood ILIKE '%flatiron%'" in sql
-    assert "['gaming'] AS query_terms" in sql
+    assert "'gaming'" in sql
     assert "%tue%" not in sql
-    assert "'gaming tue' AS query_phrase" not in sql
 
 
 def test_build_keyword_event_query_localizes_known_geo_entities() -> None:
@@ -269,7 +293,7 @@ def test_build_keyword_event_query_localizes_known_geo_entities() -> None:
     assert entity is not None
     assert entity.neighborhood == "upper manhattan"
     assert "neighborhood ILIKE '%upper manhattan%'" in sql
-    assert "WITH\n  [] AS query_terms" in sql
+    assert "relevance_score" not in sql
     assert "%near%" not in sql
     assert "%columbia%" not in sql
     assert "%university%" not in sql
@@ -280,9 +304,9 @@ def test_build_keyword_event_query_combines_topic_with_geo_entity() -> None:
     sql = build_keyword_event_query("ai events near Columbia University")
 
     assert "neighborhood ILIKE '%upper manhattan%'" in sql
-    assert "%ai%" in sql
+    assert "'ai'" in sql
     assert "%columbia%" not in sql
-    assert "ORDER BY relevance_score DESC" in sql
+    assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql
 
 
 def test_expanded_keyword_terms_handles_running() -> None:
@@ -364,6 +388,39 @@ def test_likely_event_list_question_requires_event_search_intent() -> None:
     assert likely_event_list_question("top 3 AI events")
     assert likely_event_list_question("events in upper west side?")
     assert not likely_event_list_question("What is our refund policy for events?")
+
+
+def test_likely_event_search_plan_question_covers_topic_shorthand() -> None:
+    assert likely_event_search_plan_question("hacker")
+    assert likely_event_search_plan_question("events about AI & data")
+    assert not likely_event_search_plan_question("what is our refund policy for events?")
+    assert not likely_event_search_plan_question("what changed from yesterday?")
+
+
+def test_event_search_plan_is_structured_and_rendered_succinctly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-30")
+
+    plan = build_event_search_plan("open RSVP events in east village on tuesday morning")
+    sql = render_event_search_sql(plan)
+
+    assert plan.as_dict() == {
+        "intent": "event_search",
+        "city": "nyc",
+        "terms": [],
+        "date": "2026-06-02",
+        "neighborhood": "east village",
+        "time_filter": "(toHour(start_at) >= 5 AND toHour(start_at) < 12)",
+        "open_rsvp": True,
+        "limit": 25,
+        "offset": 0,
+    }
+    assert len(sql) < 650
+    assert "multiSearchAnyCaseInsensitive" not in sql
+    assert "rsvp_url != ''" in sql
+    assert "event_date = '2026-06-02'" in sql
+    assert "neighborhood ILIKE '%east village%'" in sql
 
 
 def test_format_event_rows_is_deterministic_and_preserves_url() -> None:
@@ -476,10 +533,10 @@ class RecordingClickHouse:
         ]
 
 
-def test_agent_uses_llm_tool_call_for_plain_location_event_question() -> None:
+def test_agent_uses_structured_plan_for_plain_location_event_question() -> None:
     clickhouse = RecordingClickHouse()
 
-    class ToolCallingAgent(NytwSubconsciousAgent):
+    class PlannedSearchAgent(NytwSubconsciousAgent):
         def __init__(self) -> None:
             super().__init__(
                 clickhouse=clickhouse,  # type: ignore[arg-type]
@@ -489,38 +546,6 @@ def test_agent_uses_llm_tool_call_for_plain_location_event_question() -> None:
 
         def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
             self.calls += 1
-            if self.calls == 1:
-                return {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "tool_calls": [
-                                    {
-                                        "id": "call-1",
-                                        "function": {
-                                            "name": "query_nytw_clickhouse",
-                                            "arguments": json.dumps(
-                                                {
-                                                    "sql": (
-                                                        "SELECT event_id, title, event_date, start_time, "
-                                                        "end_time, neighborhood, venue_name, rsvp_url, "
-                                                        "going_guest_count, description AS description_excerpt, "
-                                                        "count() OVER () AS total_matches "
-                                                        "FROM nytw_current_events "
-                                                        "WHERE fetch_status = 'ok' AND NOT canceled "
-                                                        "AND neighborhood ILIKE '%upper west side%' "
-                                                        "LIMIT 26"
-                                                    )
-                                                }
-                                            ),
-                                        },
-                                    }
-                                ],
-                            }
-                        }
-                    ]
-                }
             return {
                 "choices": [
                     {
@@ -532,19 +557,69 @@ def test_agent_uses_llm_tool_call_for_plain_location_event_question() -> None:
                 ]
             }
 
-    agent = ToolCallingAgent()
+    agent = PlannedSearchAgent()
 
     answer = agent.ask("events in upper west side?")
 
     assert clickhouse.sql is not None
     assert "neighborhood ILIKE" in clickhouse.sql
-    assert "LIMIT 26" in clickhouse.sql
+    assert "LIMIT 25" in clickhouse.sql
     assert "count() OVER () AS total_matches" in clickhouse.sql
     assert answer == "Showing 1-25 of 72 matching events."
     assert [row["event_id"] for row in agent.last_event_map_rows] == [
         f"event-{index}" for index in range(1, 26)
     ]
-    assert agent.calls == 2
+    assert agent.calls == 1
+
+
+def test_agent_returns_deterministic_error_when_tool_query_fails() -> None:
+    class FailingClickHouse:
+        def query(self, sql: str) -> list[dict[str, str]]:
+            raise RuntimeError("Unknown expression identifier relevance_score")
+
+    class FailingToolAgent(NytwSubconsciousAgent):
+        def __init__(self) -> None:
+            super().__init__(
+                clickhouse=FailingClickHouse(),  # type: ignore[arg-type]
+                subconscious=SubconsciousConfig(api_key="test"),
+            )
+            self.calls = 0
+
+        def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "function": {
+                                        "name": "query_nytw_clickhouse",
+                                        "arguments": json.dumps(
+                                            {
+                                                "sql": (
+                                                    "SELECT title FROM nytw_current_events "
+                                                    "ORDER BY relevance_score DESC LIMIT 25"
+                                                )
+                                            }
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+
+    agent = FailingToolAgent()
+
+    answer = agent.ask("hacker events")
+
+    assert "I couldn't run the data query" in answer
+    assert "Unknown expression identifier relevance_score" in answer
+    assert agent.calls == 0
 
 
 def test_agent_uses_llm_tool_call_for_changed_since_yesterday(
@@ -692,6 +767,100 @@ def test_agent_executes_embedded_tool_call_in_thinking_content() -> None:
     assert agent.clickhouse.sql is not None  # type: ignore[union-attr]
 
 
+def test_agent_falls_back_when_planning_stream_never_emits_sql() -> None:
+    clickhouse = RecordingClickHouse()
+
+    class PlanningOnlyAgent(NytwSubconsciousAgent):
+        def __init__(self) -> None:
+            super().__init__(
+                clickhouse=clickhouse,  # type: ignore[arg-type]
+                subconscious=SubconsciousConfig(api_key="test"),
+            )
+            self.calls = 0
+
+        def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {
+                                "role": "assistant",
+                                "content": (
+                                    "I need to query nytw_current_events for events about AI "
+                                    "and data. Let me write the SQL query:"
+                                ),
+                            },
+                        }
+                    ]
+                }
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "Fallback answer"}}
+                ]
+            }
+
+    agent = PlanningOnlyAgent()
+
+    answer = agent.ask("tell me about AI & data")
+
+    assert answer == "Fallback answer"
+    assert clickhouse.sql is not None
+    assert "multiSearchAnyCaseInsensitive" in clickhouse.sql
+    assert "AI & data" not in clickhouse.sql
+    assert agent.calls == 2
+
+
+def test_agent_rejects_empty_sql_without_clickhouse_validation_error() -> None:
+    clickhouse = RecordingClickHouse()
+
+    class EmptySqlAgent(NytwSubconsciousAgent):
+        def __init__(self) -> None:
+            super().__init__(
+                clickhouse=clickhouse,  # type: ignore[arg-type]
+                subconscious=SubconsciousConfig(api_key="test"),
+            )
+            self.calls = 0
+
+        def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "query_nytw_clickhouse",
+                                            "arguments": json.dumps({"sql": ""}),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "Fallback answer"}}
+                ]
+            }
+
+    agent = EmptySqlAgent()
+
+    answer = agent.ask("tell me about AI & data")
+
+    assert "I couldn't run the data query" in answer
+    assert "The model did not produce a SQL query" in answer
+    assert "SQL query is empty" not in answer
+    assert clickhouse.sql is None
+    assert agent.calls == 1
+
+
 def test_agent_from_env_does_not_require_clickhouse_until_query(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUBCONSCIOUS_API_KEY", "subconscious-test")
     monkeypatch.delenv("CLICKHOUSE_HOST", raising=False)
@@ -762,7 +931,7 @@ def test_chat_request_can_override_thinking_flag() -> None:
     assert captured["body"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_agent_disables_thinking_for_tool_result_presentation() -> None:
+def test_agent_uses_thinking_for_query_generation_and_disables_it_for_presentation() -> None:
     class PresentationThinkingAgent(NytwSubconsciousAgent):
         def __init__(self) -> None:
             super().__init__(
@@ -806,7 +975,7 @@ def test_agent_disables_thinking_for_tool_result_presentation() -> None:
     agent = PresentationThinkingAgent()
 
     assert agent.ask("how many events?") == "Final answer"
-    assert agent.thinking_flags == [None, False]
+    assert agent.thinking_flags == [True, False]
 
 
 def test_agent_reports_nonstream_token_usage() -> None:
@@ -867,7 +1036,7 @@ def test_agent_continues_truncated_nonstream_response() -> None:
     assert agent.calls == 2
 
 
-def test_agent_buffers_tool_final_answer_when_not_verbose_streaming() -> None:
+def test_agent_streams_tool_final_answer_to_visible_callback() -> None:
     class BufferedFinalAgent(NytwSubconsciousAgent):
         def __init__(self) -> None:
             super().__init__(
@@ -903,15 +1072,13 @@ def test_agent_buffers_tool_final_answer_when_not_verbose_streaming() -> None:
 
             if kwargs.get("stream_callback"):
                 self.streamed_final = True
-                kwargs["stream_callback"](
-                    "I should explain that the previous query returned 0 rows."
-                )
+                kwargs["stream_callback"]("No matching events found.")
                 return {
                     "choices": [
                         {
                             "message": {
                                 "role": "assistant",
-                                "content": "I should explain that the previous query returned 0 rows.",
+                                "content": "No matching events found.",
                             }
                         }
                     ]
@@ -926,11 +1093,11 @@ def test_agent_buffers_tool_final_answer_when_not_verbose_streaming() -> None:
     agent = BufferedFinalAgent()
     streamed = []
 
-    answer = agent.ask("knowledge graph events", stream_callback=streamed.append)
+    answer = agent.ask("what about knowledge graph context", stream_callback=streamed.append)
 
     assert answer == "No matching events found."
-    assert streamed == []
-    assert agent.streamed_final is False
+    assert streamed == ["No matching events found."]
+    assert agent.streamed_final is True
 
 
 def test_agent_continues_truncated_verbose_stream_response() -> None:
@@ -1001,7 +1168,7 @@ def test_agent_continues_truncated_verbose_stream_response() -> None:
     raw = []
 
     answer = agent.ask(
-        "knowledge graph events",
+        "what about knowledge graph context",
         stream_callback=visible.append,
         raw_stream_callback=raw.append,
     )
@@ -1054,7 +1221,7 @@ def test_agent_can_still_verbose_stream_tool_final_answer() -> None:
     raw = []
 
     answer = agent.ask(
-        "knowledge graph events",
+        "what about knowledge graph context",
         stream_callback=visible.append,
         raw_stream_callback=raw.append,
     )
@@ -1062,6 +1229,60 @@ def test_agent_can_still_verbose_stream_tool_final_answer() -> None:
     assert answer == "Answer"
     assert visible == ["Answer"]
     assert raw == ["<think>plan</think>Answer"]
+
+
+def test_agent_streams_query_generation_planning_separately_from_final_answer() -> None:
+    class PlanningStreamAgent(NytwSubconsciousAgent):
+        def __init__(self) -> None:
+            super().__init__(
+                clickhouse=RecordingClickHouse(),  # type: ignore[arg-type]
+                subconscious=SubconsciousConfig(api_key="test"),
+            )
+            self.calls = 0
+
+        def _chat(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                assert kwargs.get("enable_thinking") is True
+                assert callable(kwargs.get("stream_callback"))
+                kwargs["raw_stream_callback"]("<think>build sql</think>")
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "query_nytw_clickhouse",
+                                            "arguments": json.dumps(
+                                                {"sql": "SELECT title FROM nytw_events"}
+                                            ),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            if kwargs.get("stream_callback"):
+                kwargs["stream_callback"]("Answer")
+            return {"choices": [{"message": {"role": "assistant", "content": "Answer"}}]}
+
+    agent = PlanningStreamAgent()
+    planning = []
+    visible = []
+
+    answer = agent.ask(
+        "what about knowledge graph context",
+        stream_callback=visible.append,
+        planning_stream_callback=planning.append,
+    )
+
+    assert answer == "Answer"
+    assert planning == ["<think>build sql</think>"]
+    assert visible == ["Answer"]
 
 
 def test_chat_stream_accumulates_visible_content_after_thinking() -> None:
@@ -1094,7 +1315,7 @@ def test_chat_stream_accumulates_visible_content_after_thinking() -> None:
 
     assert response["choices"][0]["message"]["content"] == "<think>plan</think>Hello world"
     assert response["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
-    assert updates == ["Hello", "Hello world"]
+    assert updates == ["Hello", " world"]
 
 
 def test_chat_stream_can_emit_raw_thinking_content() -> None:

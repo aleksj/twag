@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -19,6 +20,7 @@ from .config import ClickHouseConfig
 
 DEFAULT_SUBCONSCIOUS_BASE_URL = "https://api.subconscious.dev/v1"
 DEFAULT_SUBCONSCIOUS_MODEL = "subconscious/tim-qwen3.6-27b"
+LOGGER = logging.getLogger(__name__)
 TokenUsageCallback = Callable[[dict[str, Any]], None]
 DEFAULT_EVENT_PAGE_SIZE = 25
 MAX_EVENT_PAGE_SIZE = 100
@@ -259,7 +261,7 @@ evening, or tonight.
 For weekday requests, compute the next matching weekday from the current local
 date. For neighborhood requests such as "East Village", "SoHo", "Cambridge",
 or "Upper West Side", use a hard neighborhood/venue/address filter; do not
-treat the neighborhood words as only loose ranking terms. For time windows use
+treat the neighborhood words as only loose text terms. For time windows use
 start_at: morning is 05:00-11:59, afternoon is 12:00-16:59, and evening/tonight
 is 17:00 or later.
 For landmark or campus requests such as "near Columbia University", localize
@@ -269,16 +271,26 @@ examples: Columbia University -> Upper Manhattan; NYU -> Greenwich Village;
 Harvard, Harvard Square, and MIT -> Cambridge.
 
 SQL construction rules for event-search questions:
-- The model is responsible for building the ClickHouse SQL. Do not rely on
-  keyword-only matching when the user supplied structured constraints.
+- Build the ClickHouse SQL yourself.
+- First identify hard filters. Hard filters go in WHERE and are not keyword
+  terms. Hard filters include city, date, weekday, morning/afternoon/evening,
+  neighborhood, campus, landmark, venue, RSVP availability, capacity, canceled
+  status, and host when the user asks for a specific host.
+- Then identify topic words. Topic words are what the event is about: AI,
+  security, hacker, climate, robotics, investing, art, etc. Only topic words
+  should become text-match terms.
+- For topic searches, do not require every word to match. Search broadly with
+  one compact multiSearchAnyCaseInsensitive(concatWithSeparator(...), [...])
+  predicate, then return the matching rows in calendar order unless the user
+  explicitly asks for a different sort.
 - For list/recommend/find/top event questions, call the tool with a SELECT from
   {prefix}_current_events and include: event_id, title, event_date, start_time,
   end_time, neighborhood, venue_name, rsvp_url, going_guest_count, a compact
   description excerpt, and count() OVER () AS total_matches.
-- Apply structured constraints in WHERE before ranking:
+- Apply structured constraints in WHERE before topic matching:
   event_date for dates/weekdays/weekday abbreviations; start_at/toHour(start_at)
   for morning/afternoon/evening; neighborhood/venue_name/venue_address for
-  locations. Example: "gaming events in flatiron on tue" means query_terms
+  locations. Example: "gaming events in flatiron on tue" means the topic terms
   should include gaming, WHERE should include the next Tuesday event_date and
   Flatiron location filter, and "tue" must not be searched as text.
 - If the user asks for N results, use LIMIT N+1 so the app can know whether
@@ -289,6 +301,33 @@ SQL construction rules for event-search questions:
   record_id as the event id, table_name = '{prefix}_events' when the user wants
   event-level changes, and convert relative windows such as "yesterday" or
   "last 7 days" into concrete synced_at filters.
+
+Text matching pattern for event retrieval:
+- Keep SQL succinct. Avoid CTEs, nested SELECTs, repeated OR ladders, scoring
+  expressions, and retrieval_context unless the user explicitly asks for them.
+- Use only the real columns listed below. Do not invent search_text, tags,
+  concepts, aliases, embedding, or vector columns.
+- Match topic words against title, description, markdown_body, host,
+  neighborhood, venue_name, venue_address, and arrayStringConcat(badges, ' ').
+  Do not search only title or only description.
+- Expand obvious synonyms before writing SQL. Examples:
+  * "AI infrastructure" -> ai, artificial intelligence, machine learning,
+    agents, agent tooling, semantic data, knowledge graph, vector search, RAG,
+    MCP, data infrastructure.
+  * "hacker" -> hacker, hacking, hackathon, security, cybersecurity, CTF,
+    developer, builder, maker.
+- Simple recipe:
+  1. Put hard filters in WHERE.
+  2. Build topic match terms only from topic words and synonyms.
+  3. Use one multiSearchAnyCaseInsensitive(concatWithSeparator(...), [...])
+     predicate to keep rows with at least one topic/synonym match.
+  4. ORDER BY event_date ASC, start_at ASC, title ASC.
+- Do not match filler words. Ignore words like near, events, event, tech, week,
+  show, list, best, good, find, on, in, at, the, today, tomorrow, monday, tue,
+  morning, evening, and city/neighborhood names already used as hard filters.
+- The current schema does not provide embedding vectors. Do not invent vector
+  columns or cosineDistance queries unless an embedding column is explicitly
+  present in the table schema or requested by the user.
 
 Use the {tool_name} tool whenever the user asks for facts, counts,
 rankings, filtering, recommendations, or analysis that depends on the data.
@@ -413,10 +452,10 @@ Answer contract:
 - Never print SQL unless the user explicitly asks for SQL.
 - For "top N", "best N", "recommend N", or "list N" questions, answer with
   exactly N event bullets when N is stated. For open-ended event-search
-  questions with no N, preserve the provided ranked result page instead of
+  questions with no N, preserve the provided result page instead of
   hand-picking a smaller subset.
-- Keep result order from the data query. It is already ranked from most relevant
-  to least relevant or ordered by the requested structured filters.
+- Keep result order from the data query. It is already ordered by the requested
+  structured filters.
 - Each event bullet must be one compact line:
   **Title** — date/time — venue or neighborhood — why it matches — RSVP URL.
 - For counts, answer in one sentence.
@@ -484,8 +523,8 @@ Do not reason about formatting. Apply the answer contract directly.
 Follow the answer contract exactly.
 If fewer rows are provided than requested, show all provided rows without
 apologizing. Do not invent missing events.
-If no explicit smaller N was requested, preserve the ranked page of event rows
-that was provided. Do not reduce it to a hand-picked top 5.
+If no explicit smaller N was requested, preserve the page of event rows that
+was provided. Do not reduce it to a hand-picked top 5.
 """.strip()
 
 CONTINUE_TRUNCATED_PROMPT = """
@@ -516,7 +555,13 @@ def build_query_tool(city: CityConfig | None = None) -> dict[str, Any]:
                             "current calendar data, and UNION ALL across nytw_current_events "
                             "and bostw_current_events only when the user asks across cities. "
                             "For event search, build the SQL yourself with explicit WHERE "
-                            "filters for dates, weekday abbreviations, locations, and time windows."
+                            "filters for dates, weekday abbreviations, locations, and time windows. "
+                            "For topic search: put hard filters in WHERE, build topic terms "
+                            "only from topic words and synonyms, keep SQL succinct, use one "
+                            "multiSearchAnyCaseInsensitive(concatWithSeparator(...), [...]) predicate across "
+                            "real text columns, and ORDER BY event_date ASC, start_at ASC, title ASC. "
+                            "Do not invent search_text, tags, concepts, aliases, embedding, or "
+                            "relevance_score columns."
                         ),
                     }
                 },
@@ -657,6 +702,18 @@ def verified_answer_or_placeholder_warning(content: str) -> str:
     return answer
 
 
+def format_query_failure_response(error: Any) -> str:
+    detail = str(error or "unknown query error").strip()
+    if len(detail) > 220:
+        detail = detail[:217].rstrip() + "..."
+    return (
+        "I couldn't run the data query for that request.\n\n"
+        f"Database error: {detail}\n\n"
+        "Try a simpler event query with a date, neighborhood, topic, or host, "
+        "for example `events in East Village on Tuesday morning`."
+    )
+
+
 def visible_stream_content(content: str) -> str:
     if "</think>" in content:
         return content.rsplit("</think>", 1)[-1]
@@ -789,6 +846,84 @@ def extract_embedded_tool_calls(content: str) -> list[dict[str, Any]]:
     return calls
 
 
+def tool_call_sql(tool_call: dict[str, Any]) -> str:
+    function = tool_call.get("function", {})
+    try:
+        args = json.loads(function.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        return ""
+    return str(args.get("sql") or "").strip()
+
+
+def tool_call_from_sql(sql: str, *, call_id: str = "deterministic-event-query") -> dict[str, Any]:
+    return {
+        "id": call_id,
+        "function": {
+            "name": active_city().tool_name,
+            "arguments": json.dumps({"sql": sql}),
+        },
+    }
+
+
+def should_use_event_query_fallback(question: str, content: str = "") -> bool:
+    if likely_event_list_question(question):
+        return True
+    if EVENT_WORD_PATTERN.search(question) and keyword_terms(question):
+        return True
+    if not keyword_terms(question):
+        return False
+    return f"{active_city().table_prefix}_current_events" in content
+
+
+@dataclass(frozen=True)
+class EventSearchPlan:
+    intent: str
+    city: str
+    terms: tuple[str, ...]
+    date: str
+    neighborhood: str
+    time_filter: str
+    open_rsvp: bool
+    limit: int
+    offset: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "intent": self.intent,
+            "city": self.city,
+            "terms": list(self.terms),
+            "date": self.date or None,
+            "neighborhood": self.neighborhood or None,
+            "time_filter": self.time_filter or None,
+            "open_rsvp": self.open_rsvp,
+            "limit": self.limit,
+            "offset": self.offset,
+        }
+
+
+QUESTION_WORD_PATTERN = re.compile(
+    r"\b(what|why|how|who|where|when|is|are|does|do|can|could|should|would)\b",
+    re.IGNORECASE,
+)
+
+
+def likely_event_search_plan_question(question: str) -> bool:
+    if likely_event_change_question(question):
+        return False
+    if likely_event_list_question(question):
+        return True
+    if QUESTION_WORD_PATTERN.search(question):
+        return False
+    if EVENT_WORD_PATTERN.search(question) and keyword_terms(question):
+        return True
+    words = re.findall(r"[a-z0-9]+", question.lower())
+    return bool(
+        keyword_terms(question)
+        and 0 < len(words) <= 4
+        and not QUESTION_WORD_PATTERN.search(question)
+    )
+
+
 def requested_event_limit(
     question: str,
     default: int = DEFAULT_EVENT_PAGE_SIZE,
@@ -853,6 +988,7 @@ def keyword_terms(question: str) -> list[str]:
         "a",
         "an",
         "and",
+        "about",
         "are",
         "best",
         "events",
@@ -870,6 +1006,7 @@ def keyword_terms(question: str) -> list[str]:
         "or",
         "show",
         "still",
+        "tell",
         "the",
         "to",
         "top",
@@ -1005,12 +1142,12 @@ def infer_event_query_time_filter(question: str) -> str:
     return "toHour(start_at) >= 17"
 
 
-def build_keyword_event_query(
+def build_event_search_plan(
     question: str,
     *,
     limit: int | None = None,
     offset: int = 0,
-) -> str:
+) -> EventSearchPlan:
     city = active_city()
     terms = expanded_keyword_terms(question)
     limit = requested_event_limit(question) if limit is None else limit
@@ -1020,115 +1157,74 @@ def build_keyword_event_query(
     has_structured_filters = bool(date_filter or neighborhood_filter or time_filter)
     if not terms and not has_structured_filters:
         terms = ["ai", "agent"]
+    return EventSearchPlan(
+        intent="event_search",
+        city=city.slug,
+        terms=tuple(terms),
+        date=date_filter,
+        neighborhood=neighborhood_filter,
+        time_filter=time_filter,
+        open_rsvp=wants_open_rsvps(question),
+        limit=limit,
+        offset=offset,
+    )
 
-    phrase = " ".join(keyword_terms(question))
-    terms_array = _clickhouse_array(terms)
-    phrase_sql = _clickhouse_string(phrase)
-    availability_filter = ""
-    if wants_open_rsvps(question):
-        availability_filter = """
-  AND rsvp_url != ''
-  AND NOT at_capacity
-  AND (remaining_capacity IS NULL OR remaining_capacity > 0)
-""".rstrip()
-    structured_filters = []
-    if date_filter:
-        structured_filters.append(f"  AND event_date = {_clickhouse_string(date_filter)}")
-    if neighborhood_filter:
-        pattern = _clickhouse_string(f"%{neighborhood_filter}%")
-        structured_filters.append(
-            "  AND ("
+
+def render_event_search_sql(plan: EventSearchPlan) -> str:
+    city = active_city()
+    where_clauses = ["fetch_status = 'ok'", "NOT canceled"]
+    if plan.open_rsvp:
+        where_clauses.extend(
+            [
+                "rsvp_url != ''",
+                "NOT at_capacity",
+                "(remaining_capacity IS NULL OR remaining_capacity > 0)",
+            ]
+        )
+    if plan.date:
+        where_clauses.append(f"event_date = {_clickhouse_string(plan.date)}")
+    if plan.neighborhood:
+        pattern = _clickhouse_string(f"%{plan.neighborhood}%")
+        where_clauses.append(
+            "("
             f"neighborhood ILIKE {pattern} OR "
             f"venue_name ILIKE {pattern} OR "
             f"venue_address ILIKE {pattern}"
             ")"
         )
-    if time_filter:
-        structured_filters.append(f"  AND {time_filter}")
-    structured_filter_sql = "\n".join(structured_filters)
-    conditions = []
-    score_parts = []
-    for term in terms:
-        escaped = term.replace("'", "\\'")
-        pattern = f"%{escaped}%"
-        conditions.append(
-            f"(title ILIKE '{pattern}' OR description ILIKE '{pattern}' OR "
-            f"host ILIKE '{pattern}' OR neighborhood ILIKE '{pattern}' OR "
-            f"venue_name ILIKE '{pattern}' OR venue_address ILIKE '{pattern}')"
-        )
-        score_parts.append(
-            "multiIf("
-            f"title ILIKE '{pattern}', 5, "
-            f"description ILIKE '{pattern}', 2, "
-            f"host ILIKE '{pattern}', 1, "
-            f"neighborhood ILIKE '{pattern}', 6, "
-            f"venue_name ILIKE '{pattern}', 3, "
-            f"venue_address ILIKE '{pattern}', 2, "
-            "0)"
-        )
-
-    score = " + ".join(score_parts) if score_parts else "0"
-    where = " OR ".join(conditions)
-    term_predicate = f"term_overlap > 0\n  OR ({where})" if where else "1"
-    order_by = (
-        "relevance_score DESC, coalesce(going_guest_count, 0) DESC"
-        if terms
-        else "event_date ASC, start_at ASC, title ASC"
+    if plan.time_filter:
+        where_clauses.append(plan.time_filter)
+    search_text = (
+        "concatWithSeparator(' ', title, description, markdown_body, host, "
+        "neighborhood, venue_name, venue_address, arrayStringConcat(badges, ' '))"
     )
-    return f"""
-WITH
-  {terms_array} AS query_terms,
-  {phrase_sql} AS query_phrase
-SELECT
-  event_id,
-  title,
-  event_date,
-  start_time,
-  end_time,
-  neighborhood,
-  venue_name,
-  rsvp_url,
-  going_guest_count,
-  left(description, 500) AS description_excerpt,
-  left(retrieval_text, 900) AS retrieval_context,
-  term_overlap,
-  (
-    ({score}) +
-    term_overlap * 4 +
-    multiIf(query_phrase != '' AND positionCaseInsensitive(retrieval_text, query_phrase) > 0, 12, 0)
-  ) AS relevance_score,
-  count() OVER () AS total_matches
-FROM
-(
-SELECT
-  *,
-  arrayCount(term -> positionCaseInsensitive(retrieval_text, term) > 0, query_terms) AS term_overlap
-FROM
-(
-SELECT
-  *,
-  concat(
-    coalesce(title, ''), ' ',
-    coalesce(description, ''), ' ',
-    coalesce(markdown_body, ''), ' ',
-    coalesce(host, ''), ' ',
-    coalesce(neighborhood, ''), ' ',
-    coalesce(venue_name, ''), ' ',
-    coalesce(venue_address, ''), ' ',
-    arrayStringConcat(badges, ' ')
-  ) AS retrieval_text
-FROM {active_city().table_prefix}_current_events
-WHERE fetch_status = 'ok'
-  AND NOT canceled
-{availability_filter}
-{structured_filter_sql}
-)
-)
-WHERE {term_predicate}
-ORDER BY {order_by}
-LIMIT {limit}
-{f"OFFSET {offset}" if offset else ""}
-""".strip()
+    if plan.terms:
+        where_clauses.append(
+            f"multiSearchAnyCaseInsensitive({search_text}, {_clickhouse_array(list(plan.terms))})"
+        )
+    sql = (
+        "SELECT event_id, title, event_date, start_time, end_time, neighborhood, "
+        "venue_name, rsvp_url, going_guest_count, left(description, 500) AS "
+        "description_excerpt, count() OVER () AS total_matches "
+        f"FROM {city.table_prefix}_current_events "
+        f"WHERE {' AND '.join(where_clauses)} "
+        "ORDER BY event_date ASC, start_at ASC, title ASC "
+        f"LIMIT {plan.limit}"
+    )
+    if plan.offset:
+        sql += f" OFFSET {plan.offset}"
+    return sql
+
+
+def build_keyword_event_query(
+    question: str,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> str:
+    return render_event_search_sql(
+        build_event_search_plan(question, limit=limit, offset=offset)
+    )
 
 
 def infer_change_query_since_date(question: str, city: CityConfig | None = None) -> str:
@@ -1329,6 +1425,7 @@ class NytwSubconsciousAgent:
         enable_thinking: bool | None = None,
         stream_callback: Callable[[str], None] | None = None,
         raw_stream_callback: Callable[[str], None] | None = None,
+        planning_stream_callback: Callable[[str], None] | None = None,
         detail_callback: Callable[[str], None] | None = None,
         token_usage_callback: TokenUsageCallback | None = None,
         progress_callback: Callable[[str], None] | None = None,
@@ -1365,12 +1462,54 @@ class NytwSubconsciousAgent:
                     "role": "user",
                     "content": (
                         "Pagination instruction: this is a follow-up page for the same "
-                        f"event-search request. Preserve the original constraints and ranking. "
+                        f"event-search request. Preserve the original constraints and ordering. "
                         f"Use LIMIT {page_size + 1} OFFSET {event_offset} in the ClickHouse SQL."
                     ),
                 }
             )
         response_parts: list[str] = []
+
+        if likely_event_search_plan_question(question):
+            if progress_callback:
+                progress_callback("Planning a structured event search.")
+            plan = build_event_search_plan(question, offset=event_offset)
+            tool_call = tool_call_from_sql(render_event_search_sql(plan))
+            if progress_callback:
+                progress_callback("Running the ClickHouse query.")
+            result = self._handle_tool_call(tool_call)
+            if detail_callback:
+                detail = (
+                    "Event search plan.\n\n"
+                    f"{json.dumps(plan.as_dict(), indent=2)}\n\n"
+                    f"ClickHouse SQL executed.\n\n{tool_call_sql(tool_call)}\n"
+                )
+                if not result.get("ok"):
+                    detail += f"\nError: {result.get('error', 'unknown error')}\n"
+                detail_callback(detail)
+            if progress_callback:
+                if result.get("ok"):
+                    row_count = int(result.get("row_count") or len(result.get("rows") or []))
+                    progress_callback(
+                        f"ClickHouse returned {row_count} "
+                        f"row{'s' if row_count != 1 else ''}; composing the answer."
+                    )
+                else:
+                    progress_callback(
+                        "The query failed validation or execution; "
+                        "preparing the error response."
+                    )
+            if not result.get("ok"):
+                return format_query_failure_response(result.get("error"))
+            return self._answer_from_tool_results(
+                messages,
+                [(tool_call, result)],
+                max_turns=max_turns,
+                enable_thinking=enable_thinking,
+                stream_callback=stream_callback,
+                raw_stream_callback=raw_stream_callback,
+                token_usage_callback=token_usage_callback,
+                progress_callback=progress_callback,
+            )
 
         for _ in range(max_turns):
             if progress_callback:
@@ -1381,7 +1520,9 @@ class NytwSubconsciousAgent:
             response = self._chat(
                 messages,
                 tools=[build_query_tool(city)],
-                enable_thinking=enable_thinking,
+                stream_callback=(lambda _partial: None) if planning_stream_callback else None,
+                raw_stream_callback=planning_stream_callback,
+                enable_thinking=True,
             )
             self._emit_token_usage(response, token_usage_callback)
             message = response["choices"][0]["message"]
@@ -1389,9 +1530,69 @@ class NytwSubconsciousAgent:
             if not tool_calls:
                 tool_calls = extract_embedded_tool_calls(message.get("content") or "")
             truncated = response_was_truncated(response)
+            content = message.get("content") or ""
 
-            if not tool_calls and looks_like_planning_leak(message.get("content") or ""):
-                messages.append({"role": "assistant", "content": message.get("content") or ""})
+            if tool_calls:
+                valid_tool_calls = [call for call in tool_calls if tool_call_sql(call)]
+                if len(valid_tool_calls) != len(tool_calls):
+                    if should_use_event_query_fallback(question, content):
+                        if progress_callback:
+                            progress_callback(
+                                "Query generation did not produce usable SQL; "
+                                "using the compact event-search fallback."
+                            )
+                        tool_calls = [
+                            tool_call_from_sql(
+                                build_keyword_event_query(question, offset=event_offset)
+                            )
+                        ]
+                    else:
+                        return format_query_failure_response(
+                            "The model did not produce a SQL query. Try a more specific "
+                            "event query with a date, neighborhood, topic, or host."
+                        )
+                else:
+                    tool_calls = valid_tool_calls
+
+            if not tool_calls and looks_like_planning_leak(content):
+                if should_use_event_query_fallback(question, content):
+                    if progress_callback:
+                        progress_callback(
+                            "Query generation produced planning text instead of SQL; "
+                            "using the compact event-search fallback."
+                        )
+                    tool_calls = [
+                        tool_call_from_sql(
+                            build_keyword_event_query(question, offset=event_offset)
+                        )
+                    ]
+                else:
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                CONTINUE_TRUNCATED_PROMPT if truncated else RETRY_AFTER_PLANNING_PROMPT
+                            ),
+                        }
+                    )
+                    continue
+
+            if not tool_calls and not looks_like_planning_leak(content):
+                messages.append(message)
+                response_parts = [
+                    merge_continued_text(
+                        "".join(response_parts),
+                        content,
+                    )
+                ]
+                if truncated:
+                    messages.append({"role": "user", "content": CONTINUE_TRUNCATED_PROMPT})
+                    continue
+                return verified_answer_or_placeholder_warning("".join(response_parts))
+
+            if not tool_calls:
+                messages.append({"role": "assistant", "content": content})
                 messages.append(
                     {
                         "role": "user",
@@ -1404,24 +1605,16 @@ class NytwSubconsciousAgent:
 
             messages.append(message)
 
-            if not tool_calls:
-                response_parts = [
-                    merge_continued_text(
-                        "".join(response_parts),
-                        message.get("content") or "",
-                    )
-                ]
-                if truncated:
-                    messages.append({"role": "user", "content": CONTINUE_TRUNCATED_PROMPT})
-                    continue
-                return verified_answer_or_placeholder_warning("".join(response_parts))
-
+            tool_results: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for tool_call in tool_calls:
                 if progress_callback:
                     progress_callback("Validating the selected ClickHouse query before execution.")
                 result = self._handle_tool_call(tool_call)
                 if detail_callback and result.get("sql"):
-                    detail_callback(f"ClickHouse SQL executed.\n\n{result['sql']}\n")
+                    detail = f"ClickHouse SQL executed.\n\n{result['sql']}\n"
+                    if not result.get("ok"):
+                        detail += f"\nError: {result.get('error', 'unknown error')}\n"
+                    detail_callback(detail)
                 if progress_callback:
                     if result.get("ok"):
                         row_count = int(result.get("row_count") or len(result.get("rows") or []))
@@ -1435,61 +1628,96 @@ class NytwSubconsciousAgent:
                             "The query failed validation or execution; "
                             "preparing the error response."
                         )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.get("id"),
-                        "name": tool_call.get("function", {}).get("name"),
-                        "content": json.dumps(result, default=_json_default),
-                    }
+                if not result.get("ok"):
+                    return format_query_failure_response(result.get("error"))
+                tool_results.append((tool_call, result))
+            return self._answer_from_tool_results(
+                messages,
+                tool_results,
+                max_turns=max_turns,
+                enable_thinking=enable_thinking,
+                stream_callback=stream_callback,
+                raw_stream_callback=raw_stream_callback,
+                token_usage_callback=token_usage_callback,
+                progress_callback=progress_callback,
+            )
+
+        raise RuntimeError("Agent did not finish within max_turns")
+
+    def _answer_from_tool_results(
+        self,
+        messages: list[dict[str, Any]],
+        tool_results: list[tuple[dict[str, Any], dict[str, Any]]],
+        *,
+        max_turns: int,
+        enable_thinking: bool | None,
+        stream_callback: Callable[[str], None] | None,
+        raw_stream_callback: Callable[[str], None] | None,
+        token_usage_callback: TokenUsageCallback | None,
+        progress_callback: Callable[[str], None] | None,
+    ) -> str:
+        if tool_results and not messages[-1].get("tool_calls"):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [tool_call for tool_call, _result in tool_results],
+                }
+            )
+        for tool_call, result in tool_results:
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.get("id"),
+                    "name": tool_call.get("function", {}).get("name"),
+                    "content": json.dumps(result, default=_json_default),
+                }
+            )
+        messages.append({"role": "user", "content": FINAL_FORMAT_PROMPT})
+        if progress_callback:
+            progress_callback("Formatting the database rows into the final answer.")
+        final_response_parts: list[str] = []
+        for _ in range(max_turns):
+            if stream_callback:
+                response = self._chat(
+                    messages,
+                    stream_callback=stream_callback,
+                    raw_stream_callback=raw_stream_callback,
+                    enable_thinking=enable_thinking,
                 )
-            messages.append({"role": "user", "content": FINAL_FORMAT_PROMPT})
-            if progress_callback:
-                progress_callback("Formatting the database rows into the final Telegram answer.")
-            final_response_parts: list[str] = []
-            for _ in range(max_turns):
-                if stream_callback and raw_stream_callback:
-                    response = self._chat(
-                        messages,
-                        stream_callback=stream_callback,
-                        raw_stream_callback=raw_stream_callback,
-                        enable_thinking=enable_thinking,
-                    )
-                else:
-                    response = self._chat(messages, enable_thinking=False)
-                self._emit_token_usage(response, token_usage_callback)
-                message = response["choices"][0]["message"]
-                content = message.get("content") or ""
-                truncated = response_was_truncated(response)
-                if looks_like_planning_leak(content):
-                    messages.append({"role": "assistant", "content": content})
-                    if truncated:
-                        final_response_parts = [
-                            merge_continued_text("".join(final_response_parts), content)
-                        ]
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                CONTINUE_TRUNCATED_PROMPT if truncated else FINAL_FORMAT_PROMPT
-                            ),
-                        }
-                    )
-                    continue
+            else:
+                response = self._chat(messages, enable_thinking=False)
+            self._emit_token_usage(response, token_usage_callback)
+            message = response["choices"][0]["message"]
+            content = message.get("content") or ""
+            truncated = response_was_truncated(response)
+            if looks_like_planning_leak(content):
+                messages.append({"role": "assistant", "content": content})
                 if truncated:
                     final_response_parts = [
                         merge_continued_text("".join(final_response_parts), content)
                     ]
-                    messages.append({"role": "assistant", "content": content})
-                    messages.append({"role": "user", "content": CONTINUE_TRUNCATED_PROMPT})
-                    continue
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            CONTINUE_TRUNCATED_PROMPT if truncated else FINAL_FORMAT_PROMPT
+                        ),
+                    }
+                )
+                continue
+            if truncated:
                 final_response_parts = [
                     merge_continued_text("".join(final_response_parts), content)
                 ]
-                return verified_answer_or_placeholder_warning("".join(final_response_parts))
-            raise RuntimeError("Agent final answer did not finish within max_turns")
-
-        raise RuntimeError("Agent did not finish within max_turns")
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": CONTINUE_TRUNCATED_PROMPT})
+                continue
+            final_response_parts = [
+                merge_continued_text("".join(final_response_parts), content)
+            ]
+            return verified_answer_or_placeholder_warning("".join(final_response_parts))
+        raise RuntimeError("Agent final answer did not finish within max_turns")
 
     def _emit_token_usage(
         self,
@@ -1587,6 +1815,7 @@ class NytwSubconsciousAgent:
         visible_sent = ""
         usage: dict[str, Any] | None = None
         finish_reason: str | None = None
+        tool_call_deltas: dict[int, dict[str, Any]] = {}
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 for raw_line in response:
@@ -1613,6 +1842,25 @@ class NytwSubconsciousAgent:
                         if isinstance(reason, str):
                             finish_reason = reason
                         delta = choice.get("delta", {}) if choice else {}
+                        for tool_delta in delta.get("tool_calls") or []:
+                            index = int(tool_delta.get("index") or 0)
+                            existing = tool_call_deltas.setdefault(
+                                index,
+                                {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                },
+                            )
+                            if tool_delta.get("id"):
+                                existing["id"] = tool_delta["id"]
+                            function_delta = tool_delta.get("function") or {}
+                            if function_delta.get("name"):
+                                existing["function"]["name"] += str(function_delta["name"])
+                            if function_delta.get("arguments"):
+                                existing["function"]["arguments"] += str(
+                                    function_delta["arguments"]
+                                )
                         chunk = str(delta.get("content") or "")
                     if not chunk:
                         continue
@@ -1621,22 +1869,34 @@ class NytwSubconsciousAgent:
                         raw_stream_callback(chunk)
                     visible = visible_stream_content(full_content)
                     if len(visible) > len(visible_sent):
+                        chunk = visible[len(visible_sent) :]
                         visible_sent = visible
-                        stream_callback(visible.strip())
+                        if chunk:
+                            stream_callback(chunk)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Subconscious API error {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Subconscious API network error: {exc}") from exc
 
+        tool_calls = [
+            call
+            for _index, call in sorted(tool_call_deltas.items())
+            if call.get("function", {}).get("name")
+            or call.get("function", {}).get("arguments")
+        ]
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": full_content,
+        }
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
         return {
             "choices": [
                 {
                     "finish_reason": finish_reason,
-                    "message": {
-                        "role": "assistant",
-                        "content": full_content,
-                    }
+                    "message": message,
                 }
             ],
             "usage": usage,
@@ -1648,10 +1908,10 @@ class NytwSubconsciousAgent:
             return {"ok": False, "error": f"Unknown tool: {function.get('name')}"}
 
         try:
-            args = json.loads(function.get("arguments") or "{}")
-            sql = args.get("sql", "")
-            if sql:
-                self.last_sql_queries.append(str(sql))
+            sql = tool_call_sql(tool_call)
+            if not sql:
+                return {"ok": False, "error": "The model did not produce a SQL query."}
+            self.last_sql_queries.append(str(sql))
             result = self._query_sql(sql, compact=True)
             if result.get("ok"):
                 rows = result.get("rows") or []
@@ -1668,7 +1928,8 @@ class NytwSubconsciousAgent:
             safe_sql = add_default_limit(validate_nytw_query(sql))
             rows = self._ensure_clickhouse().query(safe_sql)
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            LOGGER.warning("ClickHouse query failed: %s\nSQL:\n%s", exc, sql)
+            return {"ok": False, "error": str(exc), "sql": sql}
 
         result = {
             "ok": True,

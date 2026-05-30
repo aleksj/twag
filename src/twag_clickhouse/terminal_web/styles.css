@@ -265,14 +265,14 @@ h1 {
   color: var(--danger);
 }
 
-.message.detail .role {
-  color: var(--muted);
-}
-
 .content {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   line-height: 1.48;
+}
+
+.answer-content:empty {
+  display: none;
 }
 
 .content strong {
@@ -297,13 +297,16 @@ h1 {
 }
 
 .detail-details {
+  margin-top: 12px;
   color: var(--muted);
+  white-space: normal;
 }
 
 .detail-details summary {
   width: fit-content;
   cursor: pointer;
   color: var(--accent-2);
+  font-size: 14px;
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
@@ -313,10 +316,12 @@ h1 {
   overflow: auto;
   max-height: 42vh;
   margin: 10px 0 0;
-  padding: 10px;
-  border: 1px solid rgba(58, 52, 41, 0.7);
-  background: #0f0e0c;
+  padding: 12px;
+  border-left: 2px solid rgba(117, 209, 194, 0.45);
+  background: rgba(15, 14, 12, 0.72);
   color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
   white-space: pre-wrap;
 }
 

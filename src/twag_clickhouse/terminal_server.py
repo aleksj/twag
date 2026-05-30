@@ -63,6 +63,7 @@ SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 INTERNAL_TERMINAL_ERROR_REPLY = (
     "TWAG hit an internal error while answering. Please try again later."
 )
+DEFAULT_TERMINAL_MESSAGE_LIMIT = 100_000
 
 
 class SessionCreateRequest(BaseModel):
@@ -130,6 +131,17 @@ def terminal_query_heartbeat_seconds() -> float:
     return _env_float("TWAG_TERMINAL_QUERY_HEARTBEAT_SECONDS", 20.0, minimum=0.5)
 
 
+def terminal_message_limit() -> int:
+    raw = os.getenv("TWAG_TERMINAL_MESSAGE_LIMIT", "").strip()
+    if not raw:
+        return DEFAULT_TERMINAL_MESSAGE_LIMIT
+    try:
+        return max(4096, int(raw))
+    except ValueError:
+        LOGGER.warning("Ignoring invalid TWAG_TERMINAL_MESSAGE_LIMIT=%r", raw)
+        return DEFAULT_TERMINAL_MESSAGE_LIMIT
+
+
 def public_terminal_base_url() -> str:
     return os.getenv("TWAG_PUBLIC_TERMINAL_BASE_URL", "").strip().rstrip("/")
 
@@ -169,26 +181,40 @@ def terminal_status_step(step: str) -> str | None:
     if step.startswith("Letting the agent choose between "):
         return "Searching the event data and synced context."
     if step.startswith("Choosing the smallest useful data query"):
-        return None
-    if step.startswith("Preparing a ranked event search"):
+        return "Generating a ClickHouse query."
+    if step.startswith("Preparing an event search") or step.startswith("Preparing a ranked event search"):
         return "Searching events by topic, venue, host, and location."
     if step == "Checking recent event sync changes.":
         return step
     if step.startswith("Expanded search terms:"):
         return None
-    if step.startswith("Building a ranked event query"):
-        return None
+    if step.startswith("Building an event query") or step.startswith("Building a ranked event query"):
+        return "Building a ClickHouse event query."
     if step == "Validating the selected ClickHouse query before execution.":
         return "Running the ClickHouse query."
     if step.startswith("ClickHouse returned ") and "sending rows back for synthesis" in step:
         return step.replace("sending rows back for synthesis", "composing the answer")
-    if step == "Formatting the database rows into the final Telegram answer.":
-        return None
+    if step in {
+        "Formatting the database rows into the final Telegram answer.",
+        "Formatting the database rows into the final answer.",
+    }:
+        return "Composing the final answer."
     if step.startswith("ClickHouse returned ") and "formatting" in step:
         return step
     if step.startswith("Reusing the previous event query"):
         return "Loading the next page of saved results."
     return step
+
+
+def terminal_final_message_text(text: str) -> str:
+    limit = terminal_message_limit()
+    if len(text) <= limit:
+        return text
+    suffix = (
+        "\n\n[Terminal message clipped at "
+        f"{limit:,} characters. Narrow the query or ask for the next page.]"
+    )
+    return text[: max(0, limit - len(suffix))].rstrip() + suffix
 
 
 def _initial_backend_status() -> dict[str, dict[str, Any]]:
@@ -953,7 +979,7 @@ def _answer_in_thread(
 
     def emit_status(step: str) -> None:
         nonlocal last_status_step
-        display_step = step if session.verbose_output else terminal_status_step(step)
+        display_step = terminal_status_step(step)
         if not display_step or display_step == last_status_step:
             return
         last_status_step = display_step
@@ -961,11 +987,16 @@ def _answer_in_thread(
         emit({"type": "status", "text": display_step, "step": display_step})
 
     def progress(step: str) -> None:
+        if step in {
+            "Formatting the database rows into the final Telegram answer.",
+            "Formatting the database rows into the final answer.",
+        }:
+            emit({"type": "detail_done"})
         emit_status(step)
 
     def visible_stream(partial: str) -> None:
         if partial:
-            emit({"type": "delta", "text": partial, "mode": "replace"})
+            emit({"type": "delta", "text": partial, "mode": "append"})
 
     def detail_stream(chunk: str) -> None:
         if chunk:
@@ -982,7 +1013,7 @@ def _answer_in_thread(
                     emit(
                         {
                             "type": "final",
-                            "text": answer,
+                            "text": terminal_final_message_text(answer),
                             "route": question_log_route(text),
                             "usage": usage.as_dict(),
                             "duration_ms": int((time.monotonic() - started_at) * 1000),
@@ -1020,6 +1051,7 @@ def _answer_in_thread(
                         if session.verbose_output and session.thinking_enabled
                         else None
                     ),
+                    planning_stream_callback=raw_stream if session.verbose_output else None,
                     detail_callback=detail_stream if session.verbose_output else None,
                     token_usage_callback=usage.add,
                 )
@@ -1042,7 +1074,7 @@ def _answer_in_thread(
         emit(
             {
                 "type": "final",
-                "text": answer,
+                "text": terminal_final_message_text(answer),
                 "route": question_log_route(text),
                 "usage": usage.as_dict(),
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
