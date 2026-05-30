@@ -237,6 +237,12 @@ function scrollTranscriptToBottom() {
   transcript.scrollTop = transcript.scrollHeight;
 }
 
+function scrollMessageToStart(row) {
+  const transcriptBox = transcript.getBoundingClientRect();
+  const rowBox = row.getBoundingClientRect();
+  transcript.scrollTop += rowBox.top - transcriptBox.top - 8;
+}
+
 function appendMessage(role, text, className = '', options = {}) {
   const shouldScroll = options.forceScroll || transcriptIsNearBottom();
   const row = document.createElement('article');
@@ -482,10 +488,11 @@ function connect(session, options = {}) {
           content.dataset.renderedRaw = raw;
         }
         state.draftNode = null;
-        if (shouldScroll) scrollTranscriptToBottom();
+        if (shouldScroll) scrollMessageToStart(row);
         else transcript.scrollTop = transcript.scrollHeight - beforeBottom;
       } else {
-        appendMessage('twag', event.text || '', '', { forceScroll: shouldScroll });
+        const row = appendMessage('twag', event.text || '', '', { forceScroll: false });
+        if (shouldScroll) scrollMessageToStart(row);
       }
       const tokenLine = event.usage?.total_tokens ? `\nTokens: ${event.usage.total_tokens}` : '';
       appendStatus(`Done. Duration: ${event.duration_ms || 0}ms${tokenLine}`);

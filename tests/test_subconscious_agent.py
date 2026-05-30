@@ -326,6 +326,30 @@ def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
     ]
 
 
+def test_agent_tool_query_compacts_large_rows() -> None:
+    class VerboseClickHouse:
+        def query(self, sql: str) -> list[dict[str, str]]:
+            return [
+                {
+                    "event_id": "event-1",
+                    "title": "Long event",
+                    "raw_markdown": "should not reach model",
+                    "description": "word " * 500,
+                }
+            ]
+
+    agent = NytwSubconsciousAgent(
+        clickhouse=VerboseClickHouse(),  # type: ignore[arg-type]
+        subconscious=SubconsciousConfig(api_key="test"),
+    )
+
+    result = agent._query_sql("SELECT * FROM nytw_current_events LIMIT 1")
+
+    assert result["rows"][0]["event_id"] == "event-1"
+    assert "raw_markdown" not in result["rows"][0]
+    assert len(result["rows"][0]["description"]) < 800
+
+
 def test_agent_executes_embedded_tool_call_in_thinking_content() -> None:
     class AgentWithEmbeddedTool(NytwSubconsciousAgent):
         def __init__(self) -> None:

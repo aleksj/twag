@@ -18,6 +18,7 @@ REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST in .env or the shell}"
 REMOTE_DIR="${REMOTE_DIR:-/home/$REMOTE_USER/twag}"
 SSH_PORT="${SSH_PORT:-22}"
 RUN_REMOTE_INSTALL="${RUN_REMOTE_INSTALL:-false}"
+DEPLOY_TERMINAL_STATIC="${DEPLOY_TERMINAL_STATIC:-false}"
 SYNC_ENV_FILE="${SYNC_ENV_FILE:-true}"
 LOCAL_ENV_FILE="${LOCAL_ENV_FILE:-}"
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:-/etc/twag/twag.env}"
@@ -55,6 +56,10 @@ if [[ "$SYNC_ENV_FILE" == "true" ]]; then
   else
     echo "No local env file at $LOCAL_ENV_FILE; skipped remote env sync."
   fi
+fi
+
+if [[ "$DEPLOY_TERMINAL_STATIC" == "true" ]]; then
+  "$ROOT_DIR/deploy/terminal-static.sh"
 fi
 
 if [[ "$RUN_REMOTE_INSTALL" == "true" ]]; then

@@ -33,7 +33,7 @@ CONFIGURATION_ERROR_MARKERS = (
 )
 SPONSOR_LINE = os.getenv(
     "TWAG_SPONSOR_LINE",
-    "**Sponsored by Data.Flowers** - https://data.flowers/",
+    "**Sponsored by Data.Flowers** - https://data.flowers/ (engineering & web hosting) and **Subconscious** - https://www.subconscious.dev/ (custom LLM & infrastructure)",
 )
 SUBJECTIVE_QUESTION_PATTERN = re.compile(
     r"\b("
@@ -178,7 +178,7 @@ def help_reply(*, presentation: ChatPresentation = DEFAULT_PRESENTATION) -> str:
         "`/quiet` - show only result updates and final answers\n\n"
         "Use concrete criteria like topic, date, neighborhood, host, capacity, "
         "RSVP status, or time.\n\n"
-        "Built by [Aleks Jakulin](https://github.com/aleksj) and "
+        "Built by [Aleks Jakulin](https://jakul.in) and "
         "[Nate Aune](https://github.com/natea), with contributions from "
         "[Stage11 Agentics](https://github.com/Stage-11-Agentics/)."
     )

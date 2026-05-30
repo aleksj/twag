@@ -18,6 +18,7 @@ class AgentLike(Protocol):
         question: str,
         *,
         event_offset: int = 0,
+        enable_thinking: bool | None = None,
         stream_callback: Callable[[str], None] | None = None,
         raw_stream_callback: Callable[[str], None] | None = None,
         token_usage_callback: TokenUsageCallback | None = None,

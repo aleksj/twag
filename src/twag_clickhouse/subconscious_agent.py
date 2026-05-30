@@ -22,6 +22,16 @@ DEFAULT_SUBCONSCIOUS_MODEL = "subconscious/tim-qwen3.6-27b"
 TokenUsageCallback = Callable[[dict[str, Any]], None]
 DEFAULT_EVENT_PAGE_SIZE = 25
 MAX_EVENT_PAGE_SIZE = 100
+MAX_TOOL_RESULT_ROWS = 25
+MAX_TOOL_RESULT_STRING_CHARS = 700
+OMITTED_TOOL_RESULT_FIELDS = {
+    "raw_markdown",
+    "raw_json",
+    "frontmatter_json",
+    "markdown_body",
+    "content_json",
+    "text",
+}
 
 FORBIDDEN_SQL = re.compile(
     r"\b("
@@ -292,6 +302,36 @@ def build_query_tool(city: CityConfig | None = None) -> dict[str, Any]:
 
 # Back-compat constant for code that imports QUERY_TOOL directly.
 QUERY_TOOL = build_query_tool()
+
+
+def compact_tool_result_value(value: Any) -> Any:
+    if isinstance(value, str):
+        cleaned = re.sub(r"\s+", " ", value).strip()
+        if len(cleaned) > MAX_TOOL_RESULT_STRING_CHARS:
+            return cleaned[: MAX_TOOL_RESULT_STRING_CHARS - 1].rstrip() + "..."
+        return cleaned
+    if isinstance(value, list):
+        return [compact_tool_result_value(item) for item in value[:20]]
+    if isinstance(value, dict):
+        return {
+            key: compact_tool_result_value(nested)
+            for key, nested in value.items()
+            if key not in OMITTED_TOOL_RESULT_FIELDS
+        }
+    return value
+
+
+def compact_tool_result_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact_rows = []
+    for row in rows[:MAX_TOOL_RESULT_ROWS]:
+        compact_rows.append(
+            {
+                key: compact_tool_result_value(value)
+                for key, value in row.items()
+                if key not in OMITTED_TOOL_RESULT_FIELDS
+            }
+        )
+    return compact_rows
 
 
 @dataclass(frozen=True)
@@ -815,6 +855,7 @@ class NytwSubconsciousAgent:
         *,
         event_offset: int = 0,
         max_turns: int = 8,
+        enable_thinking: bool | None = None,
         stream_callback: Callable[[str], None] | None = None,
         raw_stream_callback: Callable[[str], None] | None = None,
         token_usage_callback: TokenUsageCallback | None = None,
@@ -863,7 +904,7 @@ class NytwSubconsciousAgent:
                 offset=event_offset,
             )
             self.last_sql_queries.append(sql)
-            result = self._query_sql(sql)
+            result = self._query_sql(sql, compact=False)
             if result.get("ok"):
                 self.last_event_map_rows = list((result.get("rows") or [])[:page_size])
             if progress_callback:
@@ -891,7 +932,11 @@ class NytwSubconsciousAgent:
                     f"Choosing the smallest useful data query across {city.short_name} events "
                     "and synced Senso context."
                 )
-            response = self._chat(messages, tools=[build_query_tool(city)])
+            response = self._chat(
+                messages,
+                tools=[build_query_tool(city)],
+                enable_thinking=enable_thinking,
+            )
             self._emit_token_usage(response, token_usage_callback)
             message = response["choices"][0]["message"]
             tool_calls = message.get("tool_calls") or []
@@ -1159,23 +1204,26 @@ class NytwSubconsciousAgent:
             sql = args.get("sql", "")
             if sql:
                 self.last_sql_queries.append(str(sql))
-            return self._query_sql(sql)
+            return self._query_sql(sql, compact=True)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def _query_sql(self, sql: str) -> dict[str, Any]:
+    def _query_sql(self, sql: str, *, compact: bool = True) -> dict[str, Any]:
         try:
             safe_sql = add_default_limit(validate_nytw_query(sql))
             rows = self._ensure_clickhouse().query(safe_sql)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-        return {
+        result = {
             "ok": True,
             "sql": safe_sql,
             "row_count": len(rows),
-            "rows": rows,
+            "rows": compact_tool_result_rows(rows) if compact else rows,
         }
+        if compact:
+            result["truncated_rows"] = max(0, len(rows) - MAX_TOOL_RESULT_ROWS)
+        return result
 
     def _ensure_clickhouse(self) -> ClickHouseService:
         with self._clickhouse_lock:

@@ -40,7 +40,6 @@ from .chat_session import (
     map_command_query,
     map_url_for,
     question_log_route,
-    status_text,
     update_chat_status,
 )
 from .city import CITIES, active_city, load_city
@@ -48,6 +47,7 @@ from .client import ClickHouseService
 from .config import ClickHouseConfig
 from .conversation import ConversationTurn
 from .subconscious_agent import NytwSubconsciousAgent
+from .terminal_assets import render_terminal_index
 
 
 DEFAULT_TERMINAL_HOST = "localhost"
@@ -101,12 +101,76 @@ def terminal_session_dir() -> pathlib.Path | None:
 def terminal_agent_max_turns() -> int:
     raw = os.getenv("TWAG_TERMINAL_AGENT_MAX_TURNS", "").strip()
     if not raw:
-        return 12
+        return 4
     try:
         return max(1, int(raw))
     except ValueError:
         LOGGER.warning("Ignoring invalid TWAG_TERMINAL_AGENT_MAX_TURNS=%r", raw)
-        return 12
+        return 4
+
+
+def terminal_agent_enable_thinking() -> bool:
+    raw = os.getenv("TWAG_TERMINAL_ENABLE_THINKING", "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float, *, minimum: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, float(raw))
+    except ValueError:
+        LOGGER.warning("Ignoring invalid %s=%r", name, raw)
+        return default
+
+
+def terminal_query_timeout_seconds() -> float:
+    return _env_float("TWAG_TERMINAL_QUERY_TIMEOUT_SECONDS", 180.0, minimum=1.0)
+
+
+def terminal_query_heartbeat_seconds() -> float:
+    return _env_float("TWAG_TERMINAL_QUERY_HEARTBEAT_SECONDS", 20.0, minimum=0.5)
+
+
+def terminal_query_timeout_reply(text: str, elapsed: float) -> str:
+    return (
+        f"TWAG is still working after {int(elapsed)}s, so this browser turn was "
+        "stopped instead of waiting silently.\n\n"
+        "Try a narrower follow-up, for example:\n"
+        "- events added since yesterday\n"
+        "- events updated since yesterday\n"
+        "- new open RSVP events since yesterday\n\n"
+        f"Original query: {text}"
+    )
+
+
+def terminal_status_step(step: str) -> str | None:
+    if step == "Received your message.":
+        return None
+    if step.startswith("Handing the request to the "):
+        return None
+    if step.startswith("Letting the agent choose between "):
+        return "Searching the event data and synced context."
+    if step.startswith("Choosing the smallest useful data query"):
+        return None
+    if step.startswith("Preparing a ranked event search"):
+        return "Searching events by topic, venue, host, and location."
+    if step.startswith("Expanded search terms:"):
+        return None
+    if step.startswith("Building a ranked event query"):
+        return None
+    if step == "Validating the selected ClickHouse query before execution.":
+        return "Running the ClickHouse query."
+    if step.startswith("ClickHouse returned ") and "sending rows back for synthesis" in step:
+        return step.replace("sending rows back for synthesis", "composing the answer")
+    if step == "Formatting the database rows into the final Telegram answer.":
+        return None
+    if step.startswith("ClickHouse returned ") and "formatting" in step:
+        return step
+    if step.startswith("Reusing the previous event query"):
+        return "Loading the next page of saved results."
+    return step
 
 
 def _initial_backend_status() -> dict[str, dict[str, Any]]:
@@ -135,6 +199,7 @@ class LazySessionAgent:
 
     def ask(self, *args: Any, **kwargs: Any) -> str:
         kwargs.setdefault("max_turns", terminal_agent_max_turns())
+        kwargs.setdefault("enable_thinking", terminal_agent_enable_thinking())
         return _session_agent(self.session).ask(*args, **kwargs)
 
 
@@ -284,6 +349,55 @@ def _backend_status_event(session: TerminalSession) -> dict[str, Any]:
     }
 
 
+class _TerminalToolCallFilter:
+    start_marker = "<tool_call"
+    end_marker = "</tool_call>"
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.in_tool_call = False
+
+    def feed(self, chunk: str) -> str:
+        text = self.buffer + chunk
+        self.buffer = ""
+        output: list[str] = []
+
+        while text:
+            if self.in_tool_call:
+                end = text.find(self.end_marker)
+                if end < 0:
+                    self.buffer = text[-(len(self.end_marker) - 1) :]
+                    return "".join(output)
+                text = text[end + len(self.end_marker) :]
+                self.in_tool_call = False
+                continue
+
+            start = text.find(self.start_marker)
+            if start >= 0:
+                output.append(text[:start])
+                text = text[start:]
+                self.in_tool_call = True
+                continue
+
+            suffix = self._partial_start_suffix(text)
+            if suffix:
+                output.append(text[: -len(suffix)])
+                self.buffer = suffix
+            else:
+                output.append(text)
+            return "".join(output)
+
+        return "".join(output)
+
+    def _partial_start_suffix(self, text: str) -> str:
+        limit = min(len(text), len(self.start_marker) - 1)
+        for size in range(limit, 0, -1):
+            suffix = text[-size:]
+            if self.start_marker.startswith(suffix):
+                return suffix
+        return ""
+
+
 def _probe_clickhouse_status() -> tuple[str, str]:
     try:
         service = ClickHouseService(ClickHouseConfig.from_env(env_file=None))
@@ -334,8 +448,8 @@ def favicon() -> Response:
 
 
 @app.get("/terminal", response_class=HTMLResponse)
-def terminal_index() -> FileResponse:
-    return FileResponse(TERMINAL_WEB_DIR / "index.html")
+def terminal_index() -> HTMLResponse:
+    return HTMLResponse(render_terminal_index(asset_base="/terminal"))
 
 
 @app.get("/terminal/{asset}", include_in_schema=False)
@@ -668,6 +782,10 @@ async def _handle_user_message(
 ) -> None:
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    started_at = time.monotonic()
+    timeout_seconds = terminal_query_timeout_seconds()
+    heartbeat_seconds = terminal_query_heartbeat_seconds()
+    last_heartbeat_elapsed = 0.0
 
     def emit(event: dict[str, Any]) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, event)
@@ -675,12 +793,53 @@ async def _handle_user_message(
     worker = asyncio.create_task(asyncio.to_thread(_answer_in_thread, session, text, emit))
 
     while True:
-        event = await queue.get()
+        elapsed = time.monotonic() - started_at
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            break
+        wait_seconds = min(heartbeat_seconds, remaining)
+        try:
+            event = await asyncio.wait_for(queue.get(), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= timeout_seconds:
+                break
+            if elapsed - last_heartbeat_elapsed >= heartbeat_seconds - 0.05:
+                await websocket.send_json(
+                    {
+                        "type": "status",
+                        "step": f"Still working after {int(elapsed)}s.",
+                        "text": f"Still working after {int(elapsed)}s.",
+                    }
+                )
+                last_heartbeat_elapsed = elapsed
+            continue
         if event is None:
             break
         await websocket.send_json(event)
 
-    await worker
+    if worker.done():
+        await worker
+        return
+
+    elapsed = time.monotonic() - started_at
+    _set_backend_service(session, "clickhouse", "error")
+    _set_backend_service(session, "subconscious", "error")
+    _save_session(session)
+    await websocket.send_json(_backend_status_event(session))
+    await websocket.send_json(
+        {
+            "type": "error",
+            "error": terminal_query_timeout_reply(text, elapsed),
+            "route": question_log_route(text),
+            "duration_ms": int(elapsed * 1000),
+        }
+    )
+    LOGGER.warning(
+        "Terminal query timed out after %.1fs for session %s",
+        elapsed,
+        session.session_id,
+    )
 
 
 def _answer_in_thread(
@@ -695,18 +854,29 @@ def _answer_in_thread(
     error: str | None = None
     answer = ""
     started_at = time.monotonic()
+    tool_call_filter = _TerminalToolCallFilter()
+    last_status_step: str | None = None
+
+    def emit_status(step: str) -> None:
+        nonlocal last_status_step
+        display_step = terminal_status_step(step)
+        if not display_step or display_step == last_status_step:
+            return
+        last_status_step = display_step
+        update_chat_status(state, step=step)
+        emit({"type": "status", "text": display_step, "step": display_step})
 
     def progress(step: str) -> None:
-        update_chat_status(state, step=step)
-        emit({"type": "status", "text": status_text(state), "step": step})
+        emit_status(step)
 
     def visible_stream(partial: str) -> None:
         if partial:
             emit({"type": "delta", "text": partial, "mode": "replace"})
 
     def raw_stream(chunk: str) -> None:
-        if chunk:
-            emit({"type": "delta", "text": chunk, "mode": "append"})
+        visible_chunk = tool_call_filter.feed(chunk)
+        if visible_chunk:
+            emit({"type": "delta", "text": visible_chunk, "mode": "append"})
 
     try:
         with _city_lock:
@@ -720,17 +890,15 @@ def _answer_in_thread(
                     state,
                     question=text,
                     route=route,
-                    step="Received your message.",
+                    step=first_step,
                 )
-                emit({"type": "status", "text": status_text(state), "step": "Received your message."})
+                emit_status(first_step)
                 if uses_clickhouse:
                     _set_backend_service(session, "clickhouse", "working")
                 if uses_model:
                     _set_backend_service(session, "subconscious", "working")
                 if uses_clickhouse or uses_model:
                     emit(_backend_status_event(session))
-                update_chat_status(state, step=first_step)
-                emit({"type": "status", "text": status_text(state), "step": first_step})
 
                 stream_callback = (lambda _partial: None) if state.verbose else visible_stream
                 raw_stream_callback = raw_stream if state.verbose else (lambda _chunk: None)

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import time
+
+import pytest
+
 from twag_clickhouse.terminal_server import (
     SessionCreateRequest,
     TerminalSession,
+    _TerminalToolCallFilter,
     _answer_in_thread,
     _get_session,
+    _handle_user_message,
     _sessions,
     _states,
     app,
@@ -35,7 +41,8 @@ def test_terminal_server_serves_browser_terminal_assets() -> None:
     app_response = terminal_asset("app.js")
     css_response = terminal_asset("styles.css")
 
-    assert str(index_response.path).endswith("index.html")
+    assert "/terminal/app.js?v=" in index_response.body.decode("utf-8")
+    assert "/terminal/styles.css?v=" in index_response.body.decode("utf-8")
     assert str(app_response.path).endswith("app.js")
     assert str(css_response.path).endswith("styles.css")
 
@@ -97,6 +104,58 @@ def test_answer_in_thread_emits_status_and_final_events(monkeypatch) -> None:
     assert typed_events[-1]["text"] == "answered how many events in soho?"
 
 
+def test_terminal_tool_call_filter_hides_streamed_tool_protocol() -> None:
+    stream_filter = _TerminalToolCallFilter()
+    chunks = [
+        "Thinking first.\n<too",
+        "l_call>\n=query_bostw_clickhouse\nSELECT * FROM table\n",
+        "</function>\n</tool_call>\n",
+        "Readable answer.",
+    ]
+
+    assert "".join(stream_filter.feed(chunk) for chunk in chunks) == (
+        "Thinking first.\n\nReadable answer."
+    )
+
+
+@pytest.mark.anyio
+async def test_handle_user_message_times_out_with_recovery_guidance(monkeypatch) -> None:
+    class WebSocket:
+        def __init__(self) -> None:
+            self.events = []
+
+        async def send_json(self, event):
+            self.events.append(event)
+
+    def slow_answer(_session, _text, _emit):
+        time.sleep(0.2)
+
+    monkeypatch.setattr(
+        "twag_clickhouse.terminal_server.terminal_query_timeout_seconds",
+        lambda: 0.05,
+    )
+    monkeypatch.setattr(
+        "twag_clickhouse.terminal_server.terminal_query_heartbeat_seconds",
+        lambda: 0.01,
+    )
+    monkeypatch.setattr(
+        "twag_clickhouse.terminal_server._answer_in_thread",
+        slow_answer,
+    )
+    websocket = WebSocket()
+    session = TerminalSession(session_id="timeout-session", city="boston")
+
+    await _handle_user_message(websocket, session, "what has changed from yesterday?")
+
+    error_events = [event for event in websocket.events if event["type"] == "error"]
+    status_events = [event for event in websocket.events if event["type"] == "status"]
+    assert status_events
+    assert error_events
+    assert "stopped instead of waiting silently" in error_events[-1]["error"]
+    assert "events added since yesterday" in error_events[-1]["error"]
+    assert "what has changed from yesterday?" in error_events[-1]["error"]
+
+
 def test_answer_in_thread_emits_backend_readiness_events(monkeypatch) -> None:
     monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
 
@@ -122,13 +181,16 @@ def test_answer_in_thread_emits_backend_readiness_events(monkeypatch) -> None:
 
 def test_answer_in_thread_uses_terminal_agent_turn_limit(monkeypatch) -> None:
     monkeypatch.setenv("TWAG_TERMINAL_AGENT_MAX_TURNS", "17")
+    monkeypatch.delenv("TWAG_TERMINAL_ENABLE_THINKING", raising=False)
 
     class Agent:
         def __init__(self) -> None:
             self.max_turns = None
+            self.enable_thinking = None
 
         def ask(self, question, **kwargs):
             self.max_turns = kwargs.get("max_turns")
+            self.enable_thinking = kwargs.get("enable_thinking")
             return f"answered {question}"
 
     agent = Agent()
@@ -138,6 +200,7 @@ def test_answer_in_thread_uses_terminal_agent_turn_limit(monkeypatch) -> None:
     _answer_in_thread(session, "how many events in soho?", events.append)
 
     assert agent.max_turns == 17
+    assert agent.enable_thinking is False
 
 
 def test_terminal_session_can_be_restored_from_disk(monkeypatch, tmp_path) -> None:
