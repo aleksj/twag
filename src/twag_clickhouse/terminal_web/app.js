@@ -2,6 +2,7 @@ const shell = document.querySelector('.shell');
 const transcript = document.querySelector('#transcript');
 const statusText = document.querySelector('#statusText');
 const connectionState = document.querySelector('#connectionState');
+const backendState = document.querySelector('#backendState');
 const cityState = document.querySelector('#cityState');
 const promptForm = document.querySelector('#promptForm');
 const promptInput = document.querySelector('#promptInput');
@@ -13,9 +14,11 @@ const state = {
   city: '',
   draftNode: null,
   draftRenderFrame: 0,
+  turnStatusNode: null,
   operatorToken: '',
   greetingShown: false,
   lastStatusLine: '',
+  lastBackendLine: '',
   inFlightPrompt: '',
 };
 
@@ -39,6 +42,41 @@ function setConnection(value) {
 function setCity(city) {
   state.city = city || state.city;
   cityState.textContent = `city: ${state.city || '--'}`;
+}
+
+function serviceShortState(value) {
+  return ({
+    ready: 'ready',
+    working: 'working',
+    warming: 'warming',
+    configured: 'queued',
+    unconfigured: 'off',
+    error: 'error',
+    unknown: 'check',
+  })[value] || 'check';
+}
+
+function backendHealth(services) {
+  const states = Object.values(services || {}).map(service => service?.state || 'unknown');
+  if (states.includes('error') || states.includes('unconfigured')) return 'error';
+  if (states.includes('warming') || states.includes('working')) return 'warming';
+  if (states.length && states.every(value => value === 'ready' || value === 'configured')) {
+    return 'ready';
+  }
+  return 'unknown';
+}
+
+function setBackendStatus(services) {
+  const clickhouse = services?.clickhouse?.state || 'unknown';
+  const subconscious = services?.subconscious?.state || 'unknown';
+  const line = `services: CH ${serviceShortState(clickhouse)} / AI ${serviceShortState(subconscious)}`;
+  backendState.textContent = line;
+  backendState.dataset.health = backendHealth(services);
+  backendState.title = 'ClickHouse and Subconscious readiness';
+  if (line !== state.lastBackendLine) {
+    appendStatus(line);
+    state.lastBackendLine = line;
+  }
 }
 
 function statusIsNearBottom() {
@@ -218,6 +256,32 @@ function appendMessage(role, text, className = '', options = {}) {
   return row;
 }
 
+function setTurnStatus(text, stateName = 'working') {
+  const cleanText = String(text || '').trim();
+  if (!cleanText) return;
+
+  const shouldScroll = transcriptIsNearBottom();
+  if (!state.turnStatusNode) {
+    state.turnStatusNode = appendMessage('system', '', 'turn-status', {
+      forceScroll: shouldScroll,
+    });
+    state.turnStatusNode.querySelector('.role').textContent = 'status';
+  }
+
+  const content = state.turnStatusNode.querySelector('.content');
+  content.textContent = cleanText;
+  state.turnStatusNode.dataset.turnState = stateName;
+  transcript.append(state.turnStatusNode);
+  if (shouldScroll) scrollTranscriptToBottom();
+}
+
+function clearTurnStatus() {
+  if (state.turnStatusNode) {
+    state.turnStatusNode.remove();
+    state.turnStatusNode = null;
+  }
+}
+
 function renderDraftNow() {
   if (!state.draftNode) return;
 
@@ -315,10 +379,12 @@ function submitPromptText(rawText) {
   }
 
   clearDraft();
+  clearTurnStatus();
   state.inFlightPrompt = text;
   if (!send({ type: 'message', text })) return false;
   promptInput.value = '';
   appendMessage('user', text, '', { forceScroll: true });
+  setTurnStatus('In progress: sent to TWAG.', 'working');
   appendStatus('Sent. Waiting for TWAG...');
   return true;
 }
@@ -380,6 +446,7 @@ function connect(session, options = {}) {
       socket.twagReceivedReady = true;
       state.sessionId = event.session_id;
       setCity(event.city);
+      if (event.backend_status) setBackendStatus(event.backend_status);
       appendStatus(`Ready. Session: ${event.session_id}`);
       if (event.greeting && !state.greetingShown) {
         appendMessage('twag', event.greeting, '', { forceScroll: true });
@@ -389,8 +456,11 @@ function connect(session, options = {}) {
       setCity(event.city);
       appendStatus(event.message);
       appendMessage('system', event.message);
+    } else if (event.type === 'backend_status') {
+      setBackendStatus(event.services || {});
     } else if (event.type === 'status') {
       appendStatus(event.step || event.text || '');
+      setTurnStatus(`In progress: ${event.step || event.text || 'working'}`, 'working');
     } else if (event.type === 'delta') {
       setDraft(event.text || '', event.mode);
     } else if (event.type === 'final') {
@@ -419,11 +489,13 @@ function connect(session, options = {}) {
       }
       const tokenLine = event.usage?.total_tokens ? `\nTokens: ${event.usage.total_tokens}` : '';
       appendStatus(`Done. Duration: ${event.duration_ms || 0}ms${tokenLine}`);
+      setTurnStatus(`Done. Duration: ${event.duration_ms || 0}ms`, 'done');
     } else if (event.type === 'error') {
       clearDraft();
       state.inFlightPrompt = '';
       setConnection('error');
       appendStatus(event.error || 'Unknown error.');
+      setTurnStatus(`Stopped: ${event.error || 'unknown error'}`, 'error');
       appendMessage('system', `Error: ${event.error || 'unknown error'}`);
     }
   });
@@ -438,6 +510,7 @@ function connect(session, options = {}) {
     }
     setConnection('closed');
     restoreInFlightPrompt();
+    if (state.inFlightPrompt) setTurnStatus('Disconnected before this query finished.', 'error');
     appendStatus('Disconnected. Use reconnect, then send again.');
   });
 
@@ -445,6 +518,7 @@ function connect(session, options = {}) {
     if (state.socket !== socket) return;
     setConnection('error');
     restoreInFlightPrompt();
+    if (state.inFlightPrompt) setTurnStatus('Connection error before this query finished.', 'error');
     appendStatus('Connection error. Use reconnect, then send again.');
   });
 }

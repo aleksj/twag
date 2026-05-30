@@ -108,6 +108,21 @@ h1 {
   color: var(--danger);
 }
 
+#backendState[data-health="ready"] {
+  border-color: rgba(164, 210, 111, 0.45);
+  color: var(--ok);
+}
+
+#backendState[data-health="warming"] {
+  border-color: rgba(240, 193, 90, 0.55);
+  color: var(--accent);
+}
+
+#backendState[data-health="error"] {
+  border-color: rgba(255, 116, 104, 0.5);
+  color: var(--danger);
+}
+
 .workspace {
   display: grid;
   flex: 1;
@@ -211,6 +226,28 @@ h1 {
   color: var(--danger);
 }
 
+.message.turn-status {
+  border-bottom-color: rgba(240, 193, 90, 0.35);
+}
+
+.message.turn-status .role {
+  color: var(--accent);
+}
+
+.message.turn-status .content {
+  color: var(--accent);
+}
+
+.message.turn-status[data-turn-state="done"] .role,
+.message.turn-status[data-turn-state="done"] .content {
+  color: var(--ok);
+}
+
+.message.turn-status[data-turn-state="error"] .role,
+.message.turn-status[data-turn-state="error"] .content {
+  color: var(--danger);
+}
+
 .content {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -299,7 +336,7 @@ h1 {
 
   .meta span {
     min-height: 24px;
-    max-width: 50%;
+    max-width: 42%;
     overflow: hidden;
     padding: 3px 6px;
     font-size: 11px;

@@ -44,6 +44,8 @@ from .chat_session import (
     update_chat_status,
 )
 from .city import CITIES, active_city, load_city
+from .client import ClickHouseService
+from .config import ClickHouseConfig
 from .conversation import ConversationTurn
 from .subconscious_agent import NytwSubconsciousAgent
 
@@ -107,6 +109,14 @@ def terminal_agent_max_turns() -> int:
         return 12
 
 
+def _initial_backend_status() -> dict[str, dict[str, Any]]:
+    model_state = "configured" if os.getenv("SUBCONSCIOUS_API_KEY", "").strip() else "unconfigured"
+    return {
+        "clickhouse": {"state": "unknown", "label": "ClickHouse"},
+        "subconscious": {"state": model_state, "label": "Subconscious"},
+    }
+
+
 @dataclass
 class TerminalSession:
     session_id: str
@@ -114,6 +124,9 @@ class TerminalSession:
     state: ChatState = field(default_factory=ChatState)
     agent: NytwSubconsciousAgent | None = None
     map_results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    backend_status: dict[str, dict[str, Any]] = field(
+        default_factory=_initial_backend_status
+    )
 
 
 class LazySessionAgent:
@@ -245,6 +258,59 @@ def _load_session(session_id: str) -> TerminalSession | None:
 
 def _get_session(session_id: str) -> TerminalSession | None:
     return _sessions.get(session_id) or _load_session(session_id)
+
+
+def _set_backend_service(
+    session: TerminalSession,
+    service: str,
+    state: str,
+    *,
+    detail: str = "",
+) -> None:
+    current = dict(session.backend_status.get(service) or {})
+    current["state"] = state
+    if detail:
+        current["detail"] = detail
+    else:
+        current.pop("detail", None)
+    session.backend_status[service] = current
+
+
+def _backend_status_event(session: TerminalSession) -> dict[str, Any]:
+    return {
+        "type": "backend_status",
+        "services": json.loads(json.dumps(session.backend_status)),
+        "updated_at": time.time(),
+    }
+
+
+def _probe_clickhouse_status() -> tuple[str, str]:
+    try:
+        service = ClickHouseService(ClickHouseConfig.from_env(env_file=None))
+        service.ping()
+        return "ready", ""
+    except ValueError as exc:
+        LOGGER.info("Terminal ClickHouse readiness is not configured: %s", exc)
+        return "unconfigured", "ClickHouse is not configured"
+    except Exception:
+        LOGGER.exception("Terminal ClickHouse readiness check failed")
+        return "error", "ClickHouse is not ready"
+
+
+async def _send_backend_status(websocket: WebSocket, session: TerminalSession) -> None:
+    try:
+        await websocket.send_json(_backend_status_event(session))
+    except Exception:
+        LOGGER.debug("Could not send terminal backend status", exc_info=True)
+
+
+async def _warm_session_services(websocket: WebSocket, session: TerminalSession) -> None:
+    _set_backend_service(session, "clickhouse", "warming")
+    await _send_backend_status(websocket, session)
+    state, detail = await asyncio.to_thread(_probe_clickhouse_status)
+    _set_backend_service(session, "clickhouse", state, detail=detail)
+    _save_session(session)
+    await _send_backend_status(websocket, session)
 
 
 @app.get("/")
@@ -435,6 +501,7 @@ def ready_event(session: TerminalSession) -> dict[str, Any]:
         "city": session.city,
         "verbose": session.state.verbose,
         "greeting": greeting,
+        "backend_status": session.backend_status,
     }
 
 
@@ -542,6 +609,8 @@ async def _websocket_session(websocket: WebSocket, session_id: str) -> None:
 
     await websocket.accept()
     await websocket.send_json(ready_event(session))
+    await _send_backend_status(websocket, session)
+    asyncio.create_task(_warm_session_services(websocket, session))
 
     try:
         while True:
@@ -579,6 +648,7 @@ async def _set_session_city(
     session.city = city.slug
     session.state = ChatState()
     session.map_results = {}
+    session.backend_status = _initial_backend_status()
     _states[session.session_id] = session.state
     _save_session(session)
     await websocket.send_json(
@@ -644,6 +714,8 @@ def _answer_in_thread(
                 agent_text = _terminal_map_command_search_query(text)
                 question_text = agent_text or text
                 route, first_step = answer_route(question_text, state)
+                uses_clickhouse = route.startswith("ClickHouse")
+                uses_model = route == "ClickHouse agent query"
                 update_chat_status(
                     state,
                     question=text,
@@ -651,6 +723,12 @@ def _answer_in_thread(
                     step="Received your message.",
                 )
                 emit({"type": "status", "text": status_text(state), "step": "Received your message."})
+                if uses_clickhouse:
+                    _set_backend_service(session, "clickhouse", "working")
+                if uses_model:
+                    _set_backend_service(session, "subconscious", "working")
+                if uses_clickhouse or uses_model:
+                    emit(_backend_status_event(session))
                 update_chat_status(state, step=first_step)
                 emit({"type": "status", "text": status_text(state), "step": first_step})
 
@@ -674,6 +752,14 @@ def _answer_in_thread(
                         answer += "\n\nNo mapped matching events found."
                 else:
                     answer += map_link
+                if uses_clickhouse:
+                    _set_backend_service(session, "clickhouse", "ready")
+                if uses_model and usage.calls:
+                    _set_backend_service(session, "subconscious", "ready")
+                elif uses_model:
+                    _set_backend_service(session, "subconscious", "configured")
+                if uses_clickhouse or uses_model:
+                    emit(_backend_status_event(session))
         emit(
             {
                 "type": "final",
@@ -685,6 +771,9 @@ def _answer_in_thread(
         )
     except Exception:
         LOGGER.exception("Unhandled terminal session error")
+        _set_backend_service(session, "clickhouse", "error")
+        _set_backend_service(session, "subconscious", "error")
+        emit(_backend_status_event(session))
         emit(
             {
                 "type": "error",

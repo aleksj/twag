@@ -54,6 +54,7 @@ def test_ready_event_includes_city_specific_telegram_greeting() -> None:
 
     assert event["type"] == "ready"
     assert event["city"] == "boston"
+    assert set(event["backend_status"]) == {"clickhouse", "subconscious"}
     assert "**TWAG Boston Tech Week Bot**" in event["greeting"]
     assert "**Sponsored by Data.Flowers**" in event["greeting"]
     assert "List AI events in Cambridge" in event["greeting"]
@@ -94,6 +95,29 @@ def test_answer_in_thread_emits_status_and_final_events(monkeypatch) -> None:
     assert any(event.get("step") == "Fake search step." for event in typed_events)
     assert typed_events[-1]["type"] == "final"
     assert typed_events[-1]["text"] == "answered how many events in soho?"
+
+
+def test_answer_in_thread_emits_backend_readiness_events(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            kwargs["token_usage_callback"]({"total_tokens": 10})
+            return f"answered {question}"
+
+    session = TerminalSession(session_id="backend-status-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "summarize the dataset", events.append)
+
+    backend_events = [
+        event for event in events if event is not None and event["type"] == "backend_status"
+    ]
+    assert backend_events
+    assert backend_events[0]["services"]["clickhouse"]["state"] == "working"
+    assert backend_events[0]["services"]["subconscious"]["state"] == "working"
+    assert backend_events[-1]["services"]["clickhouse"]["state"] == "ready"
+    assert backend_events[-1]["services"]["subconscious"]["state"] == "ready"
 
 
 def test_answer_in_thread_uses_terminal_agent_turn_limit(monkeypatch) -> None:
