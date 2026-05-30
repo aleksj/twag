@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run this on the Ubuntu host after rsync has copied the repository.
+# Run this on the Ubuntu host after deploy.sh has copied the repository.
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVICE_USER="${SERVICE_USER:-$(id -un)}"
@@ -57,10 +57,15 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-for unit in twag-telegram-agent@.service twag-telegram-agent-boston@.service twag-sync-agent@.service twag-terminal@.service; do
+for unit in twag-telegram-agent@.service twag-sync-agent@.service twag-terminal@.service; do
   sed "s#__APP_DIR__#$APP_DIR#g" "$APP_DIR/deploy/ubuntu/$unit" > "$tmpdir/$unit"
   sudo install -m 0644 "$tmpdir/$unit" "$SYSTEMD_DIR/$unit"
 done
+
+if systemctl list-unit-files "twag-telegram-agent-boston@.service" >/dev/null 2>&1; then
+  sudo systemctl disable --now "twag-telegram-agent-boston@$SERVICE_USER.service" >/dev/null 2>&1 || true
+  sudo rm -f "$SYSTEMD_DIR/twag-telegram-agent-boston@.service"
+fi
 
 if systemctl list-unit-files "twag-nimble@.service" >/dev/null 2>&1; then
   sudo systemctl disable --now "twag-nimble@$SERVICE_USER.service" >/dev/null 2>&1 || true
@@ -85,8 +90,7 @@ Not done by this installer:
   - existing $ENV_FILE values were not modified
 
 Installed unit templates:
-  twag-telegram-agent@.service (NYC)
-  twag-telegram-agent-boston@.service
+  twag-telegram-agent@.service
   twag-sync-agent@.service
   twag-terminal@.service
 
@@ -95,19 +99,17 @@ Check or edit secrets before starting:
 
 Enable and start all services:
   sudo systemctl enable --now twag-telegram-agent@$SERVICE_USER.service
-  sudo systemctl enable --now twag-telegram-agent-boston@$SERVICE_USER.service
   sudo systemctl enable --now twag-sync-agent@$SERVICE_USER.service
   sudo systemctl enable --now twag-terminal@$SERVICE_USER.service
 
 Or restart already-enabled services after a deploy:
-  sudo systemctl restart twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-sync-agent@$SERVICE_USER.service twag-terminal@$SERVICE_USER.service
+  sudo systemctl restart twag-telegram-agent@$SERVICE_USER.service twag-sync-agent@$SERVICE_USER.service twag-terminal@$SERVICE_USER.service
 
 Check status:
-  systemctl status twag-telegram-agent@$SERVICE_USER.service twag-telegram-agent-boston@$SERVICE_USER.service twag-sync-agent@$SERVICE_USER.service twag-terminal@$SERVICE_USER.service --no-pager
+  systemctl status twag-telegram-agent@$SERVICE_USER.service twag-sync-agent@$SERVICE_USER.service twag-terminal@$SERVICE_USER.service --no-pager
 
 Logs:
   journalctl -u twag-telegram-agent@$SERVICE_USER.service -f
-  journalctl -u twag-telegram-agent-boston@$SERVICE_USER.service -f
   journalctl -u twag-sync-agent@$SERVICE_USER.service -f
   journalctl -u twag-terminal@$SERVICE_USER.service -f
 

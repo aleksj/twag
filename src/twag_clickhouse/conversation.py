@@ -21,6 +21,7 @@ class AgentLike(Protocol):
         enable_thinking: bool | None = None,
         stream_callback: Callable[[str], None] | None = None,
         raw_stream_callback: Callable[[str], None] | None = None,
+        detail_callback: Callable[[str], None] | None = None,
         token_usage_callback: TokenUsageCallback | None = None,
         progress_callback: Callable[[str], None] | None = None,
         conversation_context: str | None = None,
@@ -49,6 +50,8 @@ class AgentConversation:
         *,
         stream_callback: Callable[[str], None] | None = None,
         raw_stream_callback: Callable[[str], None] | None = None,
+        detail_callback: Callable[[str], None] | None = None,
+        enable_thinking: bool | None = None,
         token_usage_callback: TokenUsageCallback | None = None,
         progress_callback: Callable[[str], None] | None = None,
         no_previous_more_message: str = "Ask an event-list question first, then type 'more'.",
@@ -57,26 +60,35 @@ class AgentConversation:
             if not self.last_event_question:
                 return no_previous_more_message
             self.last_event_offset += requested_event_limit(self.last_event_question)
+            ask_kwargs = {
+                "event_offset": self.last_event_offset,
+                "stream_callback": stream_callback,
+                "raw_stream_callback": raw_stream_callback,
+                "detail_callback": detail_callback,
+                "token_usage_callback": token_usage_callback,
+                "progress_callback": progress_callback,
+                "conversation_context": self.context_block(),
+            }
+            if enable_thinking is not None:
+                ask_kwargs["enable_thinking"] = enable_thinking
             return agent.ask(
                 self.last_event_question,
-                event_offset=self.last_event_offset,
-                stream_callback=stream_callback,
-                raw_stream_callback=raw_stream_callback,
-                token_usage_callback=token_usage_callback,
-                progress_callback=progress_callback,
-                conversation_context=self.context_block(),
+                **ask_kwargs,
             )
 
         context = self.context_block()
         effective_text = self.effective_question(text)
-        answer = agent.ask(
-            effective_text,
-            stream_callback=stream_callback,
-            raw_stream_callback=raw_stream_callback,
-            token_usage_callback=token_usage_callback,
-            progress_callback=progress_callback,
-            conversation_context=context,
-        )
+        ask_kwargs = {
+            "stream_callback": stream_callback,
+            "raw_stream_callback": raw_stream_callback,
+            "detail_callback": detail_callback,
+            "token_usage_callback": token_usage_callback,
+            "progress_callback": progress_callback,
+            "conversation_context": context,
+        }
+        if enable_thinking is not None:
+            ask_kwargs["enable_thinking"] = enable_thinking
+        answer = agent.ask(effective_text, **ask_kwargs)
         self.add_turn(
             user_text=text,
             effective_question=effective_text,

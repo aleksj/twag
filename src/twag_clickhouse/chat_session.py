@@ -91,6 +91,8 @@ class ChatState:
     active_heartbeat: str | None = None
     status_message_id: int | None = None
     verbose: bool = False
+    thinking_enabled: bool = False
+    city: str | None = None
     final_reply_sent: bool = False
 
 
@@ -173,9 +175,10 @@ def help_reply(*, presentation: ChatPresentation = DEFAULT_PRESENTATION) -> str:
         "- more\n\n"
         "**Commands**\n"
         "`/help` - show this guide\n"
+        "`/city [nyc|boston]` - switch city for this chat\n"
         "`/map [YYYY-MM-DD]` - open the event map for a given day\n"
-        "`/verbose` - show the agent thinking stream\n"
-        "`/quiet` - show only result updates and final answers\n\n"
+        "`/verbose` - enable verbose status and thinking stream\n"
+        "`/quiet` - disable verbose status and thinking stream\n\n"
         "Use concrete criteria like topic, date, neighborhood, host, capacity, "
         "RSVP status, or time.\n\n"
         "Built by [Aleks Jakulin](https://jakul.in) and "
@@ -231,14 +234,29 @@ def infer_date(text: str, fallback: str) -> str:
 
 def map_url_for(date_iso: str) -> str:
     city = active_city()
+    page_url = public_city_page_url(city.map_html_filename)
+    if not page_url:
+        return ""
+    return f"{page_url}#date={date_iso}"
+
+
+def public_city_page_url(filename: str) -> str:
     base = public_map_base_url()
     if not base:
         return ""
     if base.endswith(".html"):
         root = base.rsplit("/", 1)[0]
-        return f"{root}/{city.map_html_filename}#date={date_iso}"
+        return f"{root}/{filename}"
     base = base if base.endswith("/") else base + "/"
-    return f"{base}{city.map_html_filename}#date={date_iso}"
+    return f"{base}{filename}"
+
+
+def map_page_url_for() -> str:
+    return public_city_page_url(active_city().map_html_filename)
+
+
+def gallery_page_url_for() -> str:
+    return public_city_page_url(f"events_gallery_{active_city().slug}.html")
 
 
 def map_link_line(
@@ -319,6 +337,29 @@ def chat_command(text: str) -> str | None:
         return None
     command = first[1:].split("@", 1)[0].lower()
     return command or None
+
+
+def chat_command_arg(text: str) -> str:
+    parts = text.strip().split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+def switch_city_reply(state: ChatState, text: str) -> str:
+    arg = chat_command_arg(text)
+    if not arg:
+        city = load_city(state.city or active_city().slug)
+        return (
+            f"Current city is {city.short_name}. "
+            "Use `/city nyc` or `/city boston` to switch."
+        )
+    try:
+        city = load_city(arg)
+    except ValueError:
+        return "Unknown city. Use `/city nyc` or `/city boston`."
+    state.city = city.slug
+    state.conversation = AgentConversation()
+    clear_chat_status(state)
+    return f"Switched to {city.short_name}."
 
 
 def status_text(state: ChatState) -> str:
@@ -415,6 +456,44 @@ def answer_session_message(
     progress: Callable[[str], None] | None = None,
     stream_callback: Callable[[str], None] | None = None,
     raw_stream_callback: Callable[[str], None] | None = None,
+    detail_callback: Callable[[str], None] | None = None,
+    enable_thinking: bool | None = None,
+    token_usage_callback: Callable[[dict[str, Any]], None] | None = None,
+    presentation: ChatPresentation = DEFAULT_PRESENTATION,
+) -> str:
+    state = states.setdefault(session_id, ChatState())
+    command = chat_command(text)
+
+    if command == "city":
+        return switch_city_reply(state, text)
+
+    city_slug = state.city or active_city().slug
+    with active_city_override(city_slug):
+        return _answer_session_message_in_active_city(
+            agent,
+            states,
+            session_id,
+            text,
+            progress=progress,
+            stream_callback=stream_callback,
+            raw_stream_callback=raw_stream_callback,
+            detail_callback=detail_callback,
+            enable_thinking=enable_thinking,
+            token_usage_callback=token_usage_callback,
+            presentation=presentation,
+        )
+
+
+def _answer_session_message_in_active_city(
+    agent: NytwSubconsciousAgent | AgentLike,
+    states: dict[Hashable, ChatState],
+    session_id: Hashable,
+    text: str,
+    progress: Callable[[str], None] | None = None,
+    stream_callback: Callable[[str], None] | None = None,
+    raw_stream_callback: Callable[[str], None] | None = None,
+    detail_callback: Callable[[str], None] | None = None,
+    enable_thinking: bool | None = None,
     token_usage_callback: Callable[[dict[str, Any]], None] | None = None,
     presentation: ChatPresentation = DEFAULT_PRESENTATION,
 ) -> str:
@@ -429,9 +508,11 @@ def answer_session_message(
         return map_command_reply(text, presentation=presentation)
     if command == "verbose":
         state.verbose = True
-        return "Verbose mode is on. I'll show the agent thinking stream while I work."
+        state.thinking_enabled = True
+        return "Verbose mode is on. I'll show status and the agent thinking stream while I work."
     if command == "quiet":
         state.verbose = False
+        state.thinking_enabled = False
         return "Quiet mode is on. I'll show only streamed results and final answers."
 
     if is_subjective_question(text):
@@ -446,6 +527,8 @@ def answer_session_message(
                 text,
                 token_usage_callback=token_usage_callback,
                 progress_callback=progress,
+                detail_callback=detail_callback,
+                enable_thinking=enable_thinking,
                 no_previous_more_message="Ask an event-list question first, then send 'more'.",
             )
         except Exception as exc:
@@ -460,6 +543,8 @@ def answer_session_message(
             text,
             stream_callback=stream_callback,
             raw_stream_callback=raw_stream_callback,
+            detail_callback=detail_callback,
+            enable_thinking=enable_thinking,
             token_usage_callback=token_usage_callback,
             progress_callback=progress,
         )

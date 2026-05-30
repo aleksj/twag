@@ -14,25 +14,16 @@ fi
 case "$ACTION" in
   start|stop|restart|status)
     sudo systemctl "$ACTION" "twag-telegram-agent@$SERVICE_USER.service"
-    sudo systemctl "$ACTION" "twag-telegram-agent-boston@$SERVICE_USER.service"
     sudo systemctl "$ACTION" "twag-sync-agent@$SERVICE_USER.service"
     sudo systemctl "$ACTION" "twag-terminal@$SERVICE_USER.service"
     ;;
   logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
-      -u "twag-telegram-agent-boston@$SERVICE_USER.service" \
       -u "twag-sync-agent@$SERVICE_USER.service" \
       -u "twag-terminal@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   telegram-logs)
-    journalctl -u "twag-telegram-agent@$SERVICE_USER.service" \
-      -u "twag-telegram-agent-boston@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
-    ;;
-  ny-telegram-logs)
     journalctl -u "twag-telegram-agent@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
-    ;;
-  boston-telegram-logs)
-    journalctl -u "twag-telegram-agent-boston@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
     ;;
   sync-agent-logs|nimble-logs)
     journalctl -u "twag-sync-agent@$SERVICE_USER.service" "${JOURNAL_ARGS[@]}"
@@ -56,9 +47,6 @@ case "$ACTION" in
   diagnose)
     echo "NY systemd unit:"
     systemctl cat "twag-telegram-agent@$SERVICE_USER.service"
-    echo
-    echo "Boston systemd unit:"
-    systemctl cat "twag-telegram-agent-boston@$SERVICE_USER.service"
     echo
     echo "Terminal systemd unit:"
     systemctl cat "twag-terminal@$SERVICE_USER.service"
@@ -96,14 +84,13 @@ PY
   *)
     cat >&2 <<'USAGE'
 Usage:
+  deploy/ubuntu/control.sh
   deploy/ubuntu/control.sh start
   deploy/ubuntu/control.sh stop
   deploy/ubuntu/control.sh restart
   deploy/ubuntu/control.sh status
   deploy/ubuntu/control.sh logs
   deploy/ubuntu/control.sh telegram-logs
-  deploy/ubuntu/control.sh ny-telegram-logs
-  deploy/ubuntu/control.sh boston-telegram-logs
   deploy/ubuntu/control.sh sync-agent-logs
   deploy/ubuntu/control.sh terminal-logs
   deploy/ubuntu/control.sh nginx-diagnose

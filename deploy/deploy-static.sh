@@ -11,10 +11,10 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
 fi
 
 BUILD_DIR="${TWAG_TERMINAL_STATIC_BUILD_DIR:-$ROOT_DIR/build/terminal-static}"
-STATIC_REMOTE="${TWAG_TERMINAL_STATIC_REMOTE:?Set TWAG_TERMINAL_STATIC_REMOTE, for example root@data.flowers}"
-STATIC_REMOTE_DIR="${TWAG_TERMINAL_STATIC_REMOTE_DIR:-/var/www/html/tw}"
+STATIC_REMOTE="${TWAG_TERMINAL_STATIC_REMOTE:?Set TWAG_TERMINAL_STATIC_REMOTE, for example deploy-user@static-host.example}"
+STATIC_REMOTE_DIR="${TWAG_TERMINAL_STATIC_REMOTE_DIR:?Set TWAG_TERMINAL_STATIC_REMOTE_DIR, for example /path/to/public/tw}"
 STATIC_REMOTE_SSH_PORT="${TWAG_TERMINAL_STATIC_SSH_PORT:-22}"
-STATIC_REMOTE_OWNER="${TWAG_TERMINAL_STATIC_OWNER:-root:root}"
+STATIC_REMOTE_OWNER="${TWAG_TERMINAL_STATIC_OWNER:-}"
 
 uv run python scripts/build_terminal_static.py \
   --output "$BUILD_DIR" \
@@ -25,7 +25,12 @@ rsync -az --delete \
   -e "ssh -p $STATIC_REMOTE_SSH_PORT" \
   "$BUILD_DIR/" "$STATIC_REMOTE:$STATIC_REMOTE_DIR/"
 
+if [[ -n "$STATIC_REMOTE_OWNER" ]]; then
+  ssh -p "$STATIC_REMOTE_SSH_PORT" "$STATIC_REMOTE" \
+    "chown -R '$STATIC_REMOTE_OWNER' '$STATIC_REMOTE_DIR'"
+fi
+
 ssh -p "$STATIC_REMOTE_SSH_PORT" "$STATIC_REMOTE" \
-  "chown -R '$STATIC_REMOTE_OWNER' '$STATIC_REMOTE_DIR' && find '$STATIC_REMOTE_DIR' -type d -exec chmod 755 {} + && find '$STATIC_REMOTE_DIR' -type f -exec chmod 644 {} +"
+  "find '$STATIC_REMOTE_DIR' -type d -exec chmod 755 {} + && find '$STATIC_REMOTE_DIR' -type f -exec chmod 644 {} +"
 
 echo "Published TWAG terminal static assets to $STATIC_REMOTE:$STATIC_REMOTE_DIR"

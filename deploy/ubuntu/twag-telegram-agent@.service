@@ -10,8 +10,8 @@ Group=%i
 WorkingDirectory=__APP_DIR__
 EnvironmentFile=/etc/twag/twag.env
 Environment=TWAG_CITY=nyc
-Environment=TELEGRAM_AGENT_LOCK_FILE=/run/twag-nyc/telegram-agent.lock
-RuntimeDirectory=twag-nyc
+Environment=TELEGRAM_AGENT_LOCK_FILE=/run/twag/telegram-agent.lock
+RuntimeDirectory=twag
 RuntimeDirectoryMode=0750
 ExecStart=__APP_DIR__/.venv/bin/twag-telegram-agent
 Restart=always
@@ -22,7 +22,7 @@ TimeoutStopSec=30
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/run/twag-nyc /var/log/twag
+ReadWritePaths=/run/twag /var/log/twag
 
 [Install]
 WantedBy=multi-user.target

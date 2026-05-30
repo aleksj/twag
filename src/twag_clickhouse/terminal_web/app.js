@@ -6,23 +6,33 @@ const backendState = document.querySelector('#backendState');
 const cityState = document.querySelector('#cityState');
 const promptForm = document.querySelector('#promptForm');
 const promptInput = document.querySelector('#promptInput');
-const thinkingToggle = document.querySelector('#thinkingToggle');
 const commandButtons = document.querySelectorAll('[data-command]');
+const cityButtons = document.querySelectorAll('[data-city]');
+const externalViewButtons = document.querySelectorAll('[data-open-view]');
+const modeButtons = document.querySelectorAll('[data-mode]');
+const thinkingButtons = document.querySelectorAll('[data-thinking]');
+const COMMAND_HISTORY_KEY = 'twagTerminalCommandHistory';
+const COMMAND_HISTORY_LIMIT = 100;
 
 const state = {
   socket: null,
   sessionId: '',
   city: '',
   draftNode: null,
-  thinkingNode: null,
-  thinkingRenderFrame: 0,
+  detailNode: null,
+  detailRenderFrame: 0,
   draftRenderFrame: 0,
   operatorToken: '',
   greetingShown: false,
   lastStatusLine: '',
   lastBackendLine: '',
   inFlightPrompt: '',
+  verbose: false,
   thinking: false,
+  links: {},
+  commandHistory: [],
+  historyIndex: null,
+  historyDraft: '',
 };
 
 const appBasePath = new URL('.', window.location.href).pathname;
@@ -45,17 +55,106 @@ function setConnection(value) {
 function setCity(city) {
   state.city = city || state.city;
   cityState.textContent = `city: ${state.city || '--'}`;
+  cityButtons.forEach((button) => {
+    const active = button.dataset.city === state.city;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function setPublicLinks(links) {
+  state.links = { ...state.links, ...(links || {}) };
+}
+
+function setVerboseMode(value) {
+  state.verbose = Boolean(value);
+  modeButtons.forEach((button) => {
+    const active = button.dataset.mode === (state.verbose ? 'verbose' : 'quiet');
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
 }
 
 function setThinkingMode(value) {
   state.thinking = Boolean(value);
-  if (thinkingToggle) {
-    thinkingToggle.checked = state.thinking;
-    thinkingToggle.closest('.mode-switch')?.setAttribute(
-      'aria-label',
-      state.thinking ? 'Thinking stream on' : 'Thinking stream off',
-    );
+  thinkingButtons.forEach((button) => {
+    const active = button.dataset.thinking === (state.thinking ? 'on' : 'off');
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function loadCommandHistory() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(COMMAND_HISTORY_KEY) || '[]');
+    if (Array.isArray(parsed)) {
+      state.commandHistory = parsed
+        .filter((entry) => typeof entry === 'string' && entry.trim())
+        .slice(-COMMAND_HISTORY_LIMIT);
+    }
+  } catch {
+    state.commandHistory = [];
   }
+}
+
+function saveCommandHistory() {
+  try {
+    window.localStorage.setItem(
+      COMMAND_HISTORY_KEY,
+      JSON.stringify(state.commandHistory.slice(-COMMAND_HISTORY_LIMIT)),
+    );
+  } catch {
+    // History is convenience state; ignore storage failures.
+  }
+}
+
+function resetHistoryNavigation() {
+  state.historyIndex = null;
+  state.historyDraft = '';
+}
+
+function addCommandHistory(text) {
+  const command = String(text || '').trim();
+  if (!command) return;
+  state.commandHistory = state.commandHistory.filter((entry) => entry !== command);
+  state.commandHistory.push(command);
+  state.commandHistory = state.commandHistory.slice(-COMMAND_HISTORY_LIMIT);
+  saveCommandHistory();
+  resetHistoryNavigation();
+}
+
+function setPromptValue(text) {
+  promptInput.value = text;
+  const end = promptInput.value.length;
+  window.requestAnimationFrame(() => {
+    promptInput.setSelectionRange(end, end);
+  });
+}
+
+function navigateCommandHistory(direction) {
+  if (!state.commandHistory.length) return false;
+
+  if (direction < 0) {
+    if (state.historyIndex === null) {
+      state.historyDraft = promptInput.value;
+      state.historyIndex = state.commandHistory.length - 1;
+    } else {
+      state.historyIndex = Math.max(0, state.historyIndex - 1);
+    }
+    setPromptValue(state.commandHistory[state.historyIndex] || '');
+    return true;
+  }
+
+  if (state.historyIndex === null) return false;
+
+  if (state.historyIndex < state.commandHistory.length - 1) {
+    state.historyIndex += 1;
+    setPromptValue(state.commandHistory[state.historyIndex] || '');
+  } else {
+    setPromptValue(state.historyDraft);
+    resetHistoryNavigation();
+  }
+  return true;
 }
 
 function serviceShortState(value) {
@@ -146,6 +245,17 @@ function safeUrl(url) {
     return '';
   }
   return '';
+}
+
+function openExternalView(kind) {
+  const url = safeUrl(state.links?.[kind] || '');
+  if (!url) {
+    appendStatus(`${kind} link is not configured.`);
+    appendMessage('system', `${kind} link is not configured.`);
+    return;
+  }
+  const opened = window.open(url, '_blank', 'noopener,noreferrer');
+  if (opened) opened.opener = null;
 }
 
 function anchorHtml(url, label = url) {
@@ -320,10 +430,10 @@ function setDraft(text, mode) {
   scheduleDraftRender();
 }
 
-function renderThinkingNow() {
-  if (!state.thinkingNode) return;
+function renderDetailNow() {
+  if (!state.detailNode) return;
 
-  const content = state.thinkingNode.querySelector('.thinking-content');
+  const content = state.detailNode.querySelector('.detail-content');
   const raw = content.dataset.raw || '';
   if (content.dataset.renderedRaw === raw) return;
 
@@ -336,50 +446,50 @@ function renderThinkingNow() {
   else transcript.scrollTop = transcript.scrollHeight - beforeBottom;
 }
 
-function scheduleThinkingRender() {
-  if (state.thinkingRenderFrame) return;
-  state.thinkingRenderFrame = window.requestAnimationFrame(() => {
-    state.thinkingRenderFrame = 0;
-    renderThinkingNow();
+function scheduleDetailRender() {
+  if (state.detailRenderFrame) return;
+  state.detailRenderFrame = window.requestAnimationFrame(() => {
+    state.detailRenderFrame = 0;
+    renderDetailNow();
   });
 }
 
-function appendThinking(text, expanded = false) {
-  if (!state.thinkingNode) {
-    const row = appendMessage('thinking', '', 'thinking', { forceScroll: transcriptIsNearBottom() });
+function appendDetail(text, expanded = false) {
+  if (!state.detailNode) {
+    const row = appendMessage('detail', '', 'detail', { forceScroll: transcriptIsNearBottom() });
     const content = row.querySelector('.content');
     content.innerHTML = '';
 
     const details = document.createElement('details');
-    details.className = 'thinking-details';
+    details.className = 'detail-details';
     details.open = Boolean(expanded);
 
     const summary = document.createElement('summary');
-    summary.textContent = 'thinking';
+    summary.textContent = 'detail';
 
     const pre = document.createElement('pre');
-    pre.className = 'thinking-content';
+    pre.className = 'detail-content';
 
     details.append(summary, pre);
     content.append(details);
-    state.thinkingNode = row;
+    state.detailNode = row;
   }
 
-  const content = state.thinkingNode.querySelector('.thinking-content');
+  const content = state.detailNode.querySelector('.detail-content');
   const previous = content.dataset.raw || '';
   const next = previous + String(text || '');
   if (next === previous) return;
   content.dataset.raw = next;
-  scheduleThinkingRender();
+  scheduleDetailRender();
 }
 
-function finishThinking() {
-  if (state.thinkingRenderFrame) {
-    window.cancelAnimationFrame(state.thinkingRenderFrame);
-    state.thinkingRenderFrame = 0;
-    renderThinkingNow();
+function finishDetail() {
+  if (state.detailRenderFrame) {
+    window.cancelAnimationFrame(state.detailRenderFrame);
+    state.detailRenderFrame = 0;
+    renderDetailNow();
   }
-  state.thinkingNode = null;
+  state.detailNode = null;
 }
 
 function clearDraft() {
@@ -391,7 +501,7 @@ function clearDraft() {
     state.draftNode.remove();
     state.draftNode = null;
   }
-  finishThinking();
+  finishDetail();
 }
 
 function socketIsOpen() {
@@ -437,6 +547,7 @@ function submitPromptText(rawText) {
   const cityMatch = text.match(/^\/city\s+(.+)$/i);
   if (cityMatch) {
     if (send({ type: 'set_city', city: cityMatch[1].trim() })) {
+      addCommandHistory(text);
       promptInput.value = '';
       return true;
     }
@@ -444,9 +555,10 @@ function submitPromptText(rawText) {
   }
 
   clearDraft();
-  finishThinking();
+  finishDetail();
   state.inFlightPrompt = text;
   if (!send({ type: 'message', text })) return false;
+  addCommandHistory(text);
   promptInput.value = '';
   appendMessage('user', text, '', { forceScroll: true });
   appendStatus('Sent. Waiting for TWAG...');
@@ -510,7 +622,9 @@ function connect(session, options = {}) {
       socket.twagReceivedReady = true;
       state.sessionId = event.session_id;
       setCity(event.city);
-      setThinkingMode(event.thinking ?? event.verbose);
+      setPublicLinks(event.links);
+      setVerboseMode(event.verbose);
+      setThinkingMode(event.thinking);
       if (event.backend_status) setBackendStatus(event.backend_status);
       appendStatus(`Ready. Session: ${event.session_id}`);
       if (event.greeting && !state.greetingShown) {
@@ -519,22 +633,26 @@ function connect(session, options = {}) {
       }
     } else if (event.type === 'city') {
       setCity(event.city);
+      setPublicLinks(event.links);
       appendStatus(event.message);
       appendMessage('system', event.message);
     } else if (event.type === 'mode') {
-      setThinkingMode(event.thinking ?? event.verbose);
-      appendStatus(state.thinking ? 'Thinking stream enabled.' : 'Thinking stream disabled.');
+      setVerboseMode(event.verbose);
+      setThinkingMode(event.thinking);
+      appendStatus(
+        `${state.verbose ? 'Verbose' : 'Quiet'} output; thinking ${state.thinking ? 'on' : 'off'}.`,
+      );
     } else if (event.type === 'backend_status') {
       setBackendStatus(event.services || {});
     } else if (event.type === 'status') {
       appendStatus(event.step || event.text || '');
     } else if (event.type === 'delta') {
       setDraft(event.text || '', event.mode);
-    } else if (event.type === 'thinking_delta') {
-      appendThinking(event.text || '', event.expanded);
+    } else if (event.type === 'detail_delta' || event.type === 'thinking_delta') {
+      appendDetail(event.text || '', event.expanded);
     } else if (event.type === 'final') {
       state.inFlightPrompt = '';
-      finishThinking();
+      finishDetail();
       const shouldScroll = transcriptIsNearBottom();
       if (state.draftNode) {
         if (state.draftRenderFrame) {
@@ -559,7 +677,7 @@ function connect(session, options = {}) {
       appendStatus(`Done. Duration: ${event.duration_ms || 0}ms${tokenLine}`);
     } else if (event.type === 'error') {
       clearDraft();
-      finishThinking();
+      finishDetail();
       state.inFlightPrompt = '';
       setConnection('error');
       const summary = errorSummary(event);
@@ -596,6 +714,15 @@ promptForm.addEventListener('submit', (event) => {
   submitPromptText(promptInput.value);
 });
 
+promptInput.addEventListener('keydown', (event) => {
+  if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === 'ArrowUp') {
+    if (navigateCommandHistory(-1)) event.preventDefault();
+  } else if (event.key === 'ArrowDown') {
+    if (navigateCommandHistory(1)) event.preventDefault();
+  }
+});
+
 commandButtons.forEach((button) => {
   button.addEventListener('click', () => {
     promptInput.value = button.dataset.command || '';
@@ -604,12 +731,46 @@ commandButtons.forEach((button) => {
   });
 });
 
-thinkingToggle?.addEventListener('change', () => {
-  const next = Boolean(thinkingToggle.checked);
-  setThinkingMode(next);
-  if (!send({ type: 'set_mode', thinking: next })) {
-    setThinkingMode(!next);
-  }
+cityButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const nextCity = String(button.dataset.city || '').trim();
+    if (!nextCity || nextCity === state.city) return;
+    if (!send({ type: 'set_city', city: nextCity })) return;
+    appendStatus(`Switching city to ${button.textContent.trim()}...`);
+    promptInput.focus();
+  });
+});
+
+externalViewButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    openExternalView(button.dataset.openView || '');
+    promptInput.focus();
+  });
+});
+
+modeButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const mode = String(button.dataset.mode || '').trim();
+    const next = mode === 'verbose';
+    if (next === state.verbose) return;
+    setVerboseMode(next);
+    if (!send({ type: 'set_mode', verbose: next })) {
+      setVerboseMode(!next);
+    }
+    promptInput.focus();
+  });
+});
+
+thinkingButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const next = button.dataset.thinking === 'on';
+    if (next === state.thinking) return;
+    setThinkingMode(next);
+    if (!send({ type: 'set_mode', thinking: next })) {
+      setThinkingMode(!next);
+    }
+    promptInput.focus();
+  });
 });
 
 async function reconnect(options = {}) {

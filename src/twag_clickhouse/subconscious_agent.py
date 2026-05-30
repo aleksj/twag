@@ -1233,6 +1233,7 @@ class NytwSubconsciousAgent:
         enable_thinking: bool | None = None,
         stream_callback: Callable[[str], None] | None = None,
         raw_stream_callback: Callable[[str], None] | None = None,
+        detail_callback: Callable[[str], None] | None = None,
         token_usage_callback: TokenUsageCallback | None = None,
         progress_callback: Callable[[str], None] | None = None,
         conversation_context: str | None = None,
@@ -1268,12 +1269,14 @@ class NytwSubconsciousAgent:
                 progress_callback("Checking recent event sync changes.")
             sql = build_event_change_query(question, limit=requested_event_limit(question), offset=event_offset)
             self.last_sql_queries.append(sql)
-            if raw_stream_callback and enable_thinking:
-                raw_stream_callback(
-                    "Deterministic event change search selected.\n\n"
-                    f"{sql}\n"
-                )
             result = self._query_sql(sql, compact=False)
+            if detail_callback:
+                detail_callback(
+                    "Deterministic event change search selected.\n\n"
+                    f"{result.get('sql') or sql}\n"
+                )
+            if raw_stream_callback and enable_thinking:
+                raw_stream_callback("Deterministic event change search selected.\n")
             since_date = infer_change_query_since_date(question, city)
             return format_event_change_rows(result, since_date=since_date, offset=event_offset)
 
@@ -1293,12 +1296,14 @@ class NytwSubconsciousAgent:
                 offset=event_offset,
             )
             self.last_sql_queries.append(sql)
-            if raw_stream_callback and enable_thinking:
-                raw_stream_callback(
-                    "Deterministic event search selected.\n\n"
-                    f"{sql}\n"
-                )
             result = self._query_sql(sql, compact=False)
+            if detail_callback:
+                detail_callback(
+                    "Deterministic event search selected.\n\n"
+                    f"{result.get('sql') or sql}\n"
+                )
+            if raw_stream_callback and enable_thinking:
+                raw_stream_callback("Deterministic event search selected.\n")
             if result.get("ok"):
                 self.last_event_map_rows = list((result.get("rows") or [])[:page_size])
             if progress_callback:
@@ -1368,6 +1373,8 @@ class NytwSubconsciousAgent:
                 if progress_callback:
                     progress_callback("Validating the selected ClickHouse query before execution.")
                 result = self._handle_tool_call(tool_call)
+                if detail_callback and result.get("sql"):
+                    detail_callback(f"ClickHouse SQL executed.\n\n{result['sql']}\n")
                 if progress_callback:
                     if result.get("ok"):
                         row_count = int(result.get("row_count") or len(result.get("rows") or []))

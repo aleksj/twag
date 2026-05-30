@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -28,6 +28,7 @@ from .chat_session import (
     TELEGRAM_PRESENTATION,
     ChatState,
     TokenUsageAccumulator,
+    active_city_override,
     answer_route,
     answer_session_message,
     chat_command as telegram_command,
@@ -37,6 +38,7 @@ from .chat_session import (
     status_text,
     update_chat_status,
 )
+from .city import CITIES, active_city
 from .rendering import markdown_to_telegram_html
 from .subconscious_agent import NytwSubconsciousAgent
 from .client import CLICKHOUSE_HTTP_LOGGER
@@ -54,21 +56,56 @@ STATUS_HEARTBEAT_TEMPLATES = (
 )
 
 
-def _resolve_bot_token() -> str:
-    """Pick the Telegram bot token for the active city.
+@dataclass(frozen=True)
+class TelegramBotEndpoint:
+    token: str
+    default_city: str
+    source_env: str
 
-    The token must be named <CITY_SLUG_UPPER>_TELEGRAM_BOT_TOKEN, for example
-    NYC_TELEGRAM_BOT_TOKEN or BOSTON_TELEGRAM_BOT_TOKEN.
-    """
-    from .city import active_city
+
+def _city_token_env(slug: str) -> str:
+    return f"{slug.upper()}_TELEGRAM_BOT_TOKEN"
+
+
+def _resolve_bot_endpoints() -> list[TelegramBotEndpoint]:
+    """Pick Telegram bot tokens for the unified or city-specific bot accounts."""
+
+    generic_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if generic_token:
+        return [
+            TelegramBotEndpoint(
+                token=generic_token,
+                default_city=active_city().slug,
+                source_env="TELEGRAM_BOT_TOKEN",
+            )
+        ]
+
+    endpoints: list[TelegramBotEndpoint] = []
+    for slug in sorted(CITIES):
+        env_name = _city_token_env(slug)
+        token = os.getenv(env_name, "").strip()
+        if token:
+            endpoints.append(
+                TelegramBotEndpoint(
+                    token=token,
+                    default_city=slug,
+                    source_env=env_name,
+                )
+            )
+    if endpoints:
+        return endpoints
 
     city = active_city()
-    env_name = f"{city.slug.upper()}_TELEGRAM_BOT_TOKEN"
-    token = os.getenv(env_name, "").strip()
-    if token:
-        return token
+    env_name = _city_token_env(city.slug)
+    raise ValueError(
+        "No Telegram bot token found. Set TELEGRAM_BOT_TOKEN or one or more "
+        f"city-specific tokens such as {env_name}."
+    )
 
-    raise ValueError(f"No Telegram bot token found. Set {env_name}")
+
+def _resolve_bot_token() -> str:
+    """Backward-compatible helper for callers that only need the first token."""
+    return _resolve_bot_endpoints()[0].token
 
 
 @dataclass(frozen=True)
@@ -155,7 +192,7 @@ class QuestionLogWriter:
 
 @dataclass
 class TelegramAgentConfig:
-    bot_token: str
+    bot_endpoints: list[TelegramBotEndpoint]
     poll_timeout: int = 30
     request_timeout: int = 45
     retry_initial: float = 2.0
@@ -168,9 +205,13 @@ class TelegramAgentConfig:
     warm_clickhouse_on_start: bool = True
     allowed_chat_ids: set[int] = field(default_factory=set)
 
+    @property
+    def bot_token(self) -> str:
+        return self.bot_endpoints[0].token
+
     @classmethod
     def from_env(cls) -> "TelegramAgentConfig":
-        bot_token = _resolve_bot_token()
+        bot_endpoints = _resolve_bot_endpoints()
 
         allowed = {
             int(value.strip())
@@ -184,7 +225,7 @@ class TelegramAgentConfig:
         )
 
         return cls(
-            bot_token=bot_token,
+            bot_endpoints=bot_endpoints,
             poll_timeout=poll_timeout,
             request_timeout=request_timeout,
             retry_initial=float(os.getenv("TELEGRAM_RETRY_INITIAL_SECONDS", "2")),
@@ -349,6 +390,26 @@ class TelegramApi:
         )
 
 
+@dataclass
+class TelegramBotRuntime:
+    endpoint: TelegramBotEndpoint
+    telegram: TelegramApi
+    states: dict[int, ChatState] = field(default_factory=dict)
+    offset: int | None = None
+    retry_delay: float = 2.0
+    next_poll_at: float = 0.0
+
+
+def _chat_state_for_runtime(runtime: TelegramBotRuntime, chat_id: int) -> ChatState:
+    state = runtime.states.setdefault(
+        chat_id,
+        ChatState(city=runtime.endpoint.default_city),
+    )
+    if state.city is None:
+        state.city = runtime.endpoint.default_city
+    return state
+
+
 def split_telegram_message(text: str) -> list[str]:
     if len(text) <= TELEGRAM_MESSAGE_LIMIT:
         return [text]
@@ -422,8 +483,11 @@ def answer_message(
     progress: Any | None = None,
     stream_callback: Any | None = None,
     raw_stream_callback: Any | None = None,
+    enable_thinking: bool | None = None,
     token_usage_callback: Any | None = None,
 ) -> str:
+    state = states.setdefault(chat_id, ChatState())
+    thinking = state.thinking_enabled if enable_thinking is None else enable_thinking
     return answer_session_message(
         agent,
         states,
@@ -431,7 +495,8 @@ def answer_message(
         text,
         progress=progress,
         stream_callback=stream_callback,
-        raw_stream_callback=raw_stream_callback,
+        raw_stream_callback=raw_stream_callback if thinking else None,
+        enable_thinking=thinking,
         token_usage_callback=token_usage_callback,
         presentation=TELEGRAM_PRESENTATION,
     )
@@ -462,23 +527,27 @@ def answer_message_with_status(
             token_usage_callback=token_usage_callback,
         )
 
-    show_status = state.verbose
-    if show_status:
-        route, first_step = answer_route(text, state)
-        update_chat_status(state, question=text, route=route, step="Received your message.")
-        update_chat_status(state, step=first_step)
-
-        try:
-            sent = telegram.send_message(chat_id, status_text(state))
-            message = sent[0].get("result", {}) if sent else {}
-            state.status_message_id = int(message.get("message_id", 0) or 0) or None
-        except TelegramRateLimitError as exc:
-            show_status = False
-            print(
-                "telegram optional status disabled for this reply: "
-                f"rate limited for {exc.retry_after}s",
-                flush=True,
+    city_context = active_city_override(state.city) if state.city else nullcontext()
+    with city_context:
+        show_status = state.verbose
+        if show_status:
+            route, first_step = answer_route(text, state)
+            update_chat_status(
+                state, question=text, route=route, step="Received your message."
             )
+            update_chat_status(state, step=first_step)
+
+            try:
+                sent = telegram.send_message(chat_id, status_text(state))
+                message = sent[0].get("result", {}) if sent else {}
+                state.status_message_id = int(message.get("message_id", 0) or 0) or None
+            except TelegramRateLimitError as exc:
+                show_status = False
+                print(
+                    "telegram optional status disabled for this reply: "
+                    f"rate limited for {exc.retry_after}s",
+                    flush=True,
+                )
     status_lock = threading.Lock()
     stream_lock = threading.Lock()
     last_draft_at = 0.0
@@ -632,7 +701,10 @@ def answer_message_with_status(
             text,
             progress=progress,
             stream_callback=(lambda _partial: None) if state.verbose else stream_update,
-            raw_stream_callback=raw_stream_update if state.verbose else None,
+            raw_stream_callback=(
+                raw_stream_update if state.verbose and state.thinking_enabled else None
+            ),
+            enable_thinking=state.thinking_enabled,
             token_usage_callback=token_usage_callback,
         )
         final_preview = raw_stream_text if state.verbose and raw_stream_text else answer
@@ -695,9 +767,16 @@ def send_final_reply_with_rate_limit_retry(
 
 def run_telegram_agent() -> int:
     config = TelegramAgentConfig.from_env()
-    telegram = TelegramApi(config.bot_token, request_timeout=config.request_timeout)
+    runtimes = [
+        TelegramBotRuntime(
+            endpoint=endpoint,
+            telegram=TelegramApi(endpoint.token, request_timeout=config.request_timeout),
+            retry_delay=config.retry_initial,
+        )
+        for endpoint in config.bot_endpoints
+    ]
+    poll_timeout = config.poll_timeout if len(runtimes) == 1 else min(config.poll_timeout, 5)
     agent = NytwSubconsciousAgent.from_env()
-    states: dict[int, ChatState] = {}
     question_log = QuestionLogWriter(config.question_log_path)
 
     if config.warm_clickhouse_on_start:
@@ -711,6 +790,7 @@ def run_telegram_agent() -> int:
     clickhouse_logger = logging.getLogger(CLICKHOUSE_HTTP_LOGGER)
     print(
         "TWAG Telegram agent is polling. "
+        f"bots={[(runtime.endpoint.source_env, runtime.endpoint.default_city) for runtime in runtimes]} "
         f"module={__file__} "
         f"clickhouse_filters={[type(filter_).__name__ for filter_ in clickhouse_logger.filters]} "
         "Press Ctrl+C to stop.",
@@ -718,93 +798,122 @@ def run_telegram_agent() -> int:
     )
 
     if config.clear_webhook_on_start:
-        try:
-            telegram.delete_webhook()
-        except TelegramRateLimitError as exc:
-            print(
-                "telegram deleteWebhook rate limited; "
-                f"continuing to poll after Telegram cooldown ({exc.retry_after}s)",
-                flush=True,
-            )
-            time.sleep(exc.retry_after + 1)
-        except TelegramTransientError as exc:
-            print(f"telegram deleteWebhook transient error: {exc}; continuing to poll", flush=True)
-    offset: int | None = None
-    retry_delay = config.retry_initial
+        for runtime in runtimes:
+            try:
+                runtime.telegram.delete_webhook()
+            except TelegramRateLimitError as exc:
+                print(
+                    "telegram deleteWebhook rate limited "
+                    f"for {runtime.endpoint.source_env}; "
+                    f"continuing to poll after Telegram cooldown ({exc.retry_after}s)",
+                    flush=True,
+                )
+                runtime.next_poll_at = time.monotonic() + exc.retry_after + 1
+            except TelegramTransientError as exc:
+                print(
+                    "telegram deleteWebhook transient error "
+                    f"for {runtime.endpoint.source_env}: {exc}; continuing to poll",
+                    flush=True,
+                )
 
     while True:
-        try:
-            updates = telegram.get_updates(offset=offset, timeout=config.poll_timeout)
-            retry_delay = config.retry_initial
-            for update in updates:
-                offset = int(update["update_id"]) + 1
-                context = message_context(update)
-                if context is None:
-                    continue
+        polled_any = False
+        for runtime in runtimes:
+            if time.monotonic() < runtime.next_poll_at:
+                continue
+            polled_any = True
+            try:
+                updates = runtime.telegram.get_updates(
+                    offset=runtime.offset,
+                    timeout=poll_timeout,
+                )
+                runtime.retry_delay = config.retry_initial
+                for update in updates:
+                    runtime.offset = int(update["update_id"]) + 1
+                    context = message_context(update)
+                    if context is None:
+                        continue
 
-                chat_id = context.chat_id
-                text = context.text
-                if config.allowed_chat_ids and chat_id not in config.allowed_chat_ids:
-                    continue
+                    chat_id = context.chat_id
+                    text = context.text
+                    if config.allowed_chat_ids and chat_id not in config.allowed_chat_ids:
+                        continue
 
-                started_at = time.monotonic()
-                usage = TokenUsageAccumulator()
-                error: str | None = None
-                reply = ""
-                try:
-                    reply = answer_message_with_status(
-                        telegram=telegram,
-                        agent=agent,
-                        states=states,
-                        chat_id=chat_id,
-                        text=text,
-                        status_heartbeat_seconds=config.status_heartbeat_seconds,
-                        stream_drafts=config.stream_drafts,
-                        stream_draft_interval_seconds=config.stream_draft_interval_seconds,
-                        token_usage_callback=usage.add,
-                    )
-                except Exception as exc:
-                    error = str(exc)
-                    reply = f"Sorry, I hit an error while answering: {exc}"
-                finally:
-                    question_log.write(
-                        context,
-                        route=question_log_route(text),
-                        answer=reply,
-                        ok=error is None,
-                        error=error,
-                        duration_ms=int((time.monotonic() - started_at) * 1000),
-                        token_usage=usage.as_dict(),
-                    )
+                    _chat_state_for_runtime(runtime, chat_id)
 
-                state = states.get(chat_id)
-                if reply and not (state and state.final_reply_sent):
-                    send_final_reply_with_rate_limit_retry(telegram, chat_id, reply)
-                if state:
-                    state.final_reply_sent = False
-        except KeyboardInterrupt:
-            print("\nStopped.")
-            return 0
-        except TelegramRateLimitError as exc:
-            sleep_for = exc.retry_after + random.uniform(0, 1.0)
-            print(
-                "telegram polling rate limited: "
-                f"retrying after Telegram cooldown in {sleep_for:.1f}s",
-                flush=True,
-            )
-            time.sleep(sleep_for)
-            retry_delay = config.retry_initial
-        except TelegramTransientError as exc:
-            sleep_for = retry_delay + random.uniform(0, min(1.0, retry_delay / 4))
-            print(
-                f"telegram polling transient error: {exc}; retrying in {sleep_for:.1f}s",
-                flush=True,
-            )
-            time.sleep(sleep_for)
-            retry_delay = min(config.retry_max, retry_delay * 2)
-        except Exception as exc:
-            print(f"telegram polling error: {exc}", flush=True)
-            time.sleep(5)
+                    started_at = time.monotonic()
+                    usage = TokenUsageAccumulator()
+                    error: str | None = None
+                    reply = ""
+                    try:
+                        reply = answer_message_with_status(
+                            telegram=runtime.telegram,
+                            agent=agent,
+                            states=runtime.states,
+                            chat_id=chat_id,
+                            text=text,
+                            status_heartbeat_seconds=config.status_heartbeat_seconds,
+                            stream_drafts=config.stream_drafts,
+                            stream_draft_interval_seconds=config.stream_draft_interval_seconds,
+                            token_usage_callback=usage.add,
+                        )
+                    except Exception as exc:
+                        error = str(exc)
+                        reply = f"Sorry, I hit an error while answering: {exc}"
+                    finally:
+                        question_log.write(
+                            context,
+                            route=question_log_route(text),
+                            answer=reply,
+                            ok=error is None,
+                            error=error,
+                            duration_ms=int((time.monotonic() - started_at) * 1000),
+                            token_usage=usage.as_dict(),
+                        )
+
+                    state = runtime.states.get(chat_id)
+                    if reply and not (state and state.final_reply_sent):
+                        send_final_reply_with_rate_limit_retry(
+                            runtime.telegram,
+                            chat_id,
+                            reply,
+                        )
+                    if state:
+                        state.final_reply_sent = False
+            except KeyboardInterrupt:
+                print("\nStopped.")
+                return 0
+            except TelegramRateLimitError as exc:
+                sleep_for = exc.retry_after + random.uniform(0, 1.0)
+                print(
+                    "telegram polling rate limited "
+                    f"for {runtime.endpoint.source_env}: "
+                    f"retrying after Telegram cooldown in {sleep_for:.1f}s",
+                    flush=True,
+                )
+                runtime.next_poll_at = time.monotonic() + sleep_for
+                runtime.retry_delay = config.retry_initial
+            except TelegramTransientError as exc:
+                sleep_for = runtime.retry_delay + random.uniform(
+                    0,
+                    min(1.0, runtime.retry_delay / 4),
+                )
+                print(
+                    "telegram polling transient error "
+                    f"for {runtime.endpoint.source_env}: {exc}; "
+                    f"retrying in {sleep_for:.1f}s",
+                    flush=True,
+                )
+                runtime.next_poll_at = time.monotonic() + sleep_for
+                runtime.retry_delay = min(config.retry_max, runtime.retry_delay * 2)
+            except Exception as exc:
+                print(
+                    f"telegram polling error for {runtime.endpoint.source_env}: {exc}",
+                    flush=True,
+                )
+                runtime.next_poll_at = time.monotonic() + 5
+        if not polled_any:
+            time.sleep(0.2)
 
 
 @contextmanager

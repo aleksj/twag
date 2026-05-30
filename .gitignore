@@ -11,7 +11,7 @@ __pycache__/
 .coverage
 htmlcov/
 *.log
-deploy/ubuntu/rsync.privileged.sh
+deploy/ubuntu/deploy.local.sh
 dist/
 build/
 *.egg-info/

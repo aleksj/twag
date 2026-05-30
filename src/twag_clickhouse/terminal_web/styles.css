@@ -173,7 +173,9 @@ h1 {
 }
 
 .command-grid button,
-.mode-switch,
+.city-switch,
+.verbosity-switch,
+.thinking-switch,
 .prompt button {
   min-height: 38px;
   border: 1px solid var(--line);
@@ -183,28 +185,47 @@ h1 {
 }
 
 .command-grid button:hover,
-.mode-switch:hover,
+.city-switch button:hover,
+.verbosity-switch button:hover,
+.thinking-switch button:hover,
 .prompt button:hover,
 .command-grid button:focus-visible,
-.mode-switch:focus-within,
+.city-switch button:focus-visible,
+.verbosity-switch button:focus-visible,
+.thinking-switch button:focus-visible,
 .prompt button:focus-visible {
   border-color: var(--accent);
   outline: none;
 }
 
-.mode-switch {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 0 10px;
-  user-select: none;
+.city-switch,
+.verbosity-switch,
+.thinking-switch {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
 }
 
-.mode-switch input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--accent-2);
+.city-switch button,
+.verbosity-switch button,
+.thinking-switch button {
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.city-switch button.active,
+.city-switch button[aria-pressed="true"],
+.verbosity-switch button.active,
+.verbosity-switch button[aria-pressed="true"],
+.thinking-switch button.active,
+.thinking-switch button[aria-pressed="true"] {
+  background: rgba(117, 209, 194, 0.16);
+  color: var(--accent-2);
 }
 
 .terminal-pane {
@@ -244,7 +265,7 @@ h1 {
   color: var(--danger);
 }
 
-.message.thinking .role {
+.message.detail .role {
   color: var(--muted);
 }
 
@@ -275,11 +296,11 @@ h1 {
   outline: none;
 }
 
-.thinking-details {
+.detail-details {
   color: var(--muted);
 }
 
-.thinking-details summary {
+.detail-details summary {
   width: fit-content;
   cursor: pointer;
   color: var(--accent-2);
@@ -288,7 +309,7 @@ h1 {
   text-underline-offset: 3px;
 }
 
-.thinking-content {
+.detail-content {
   overflow: auto;
   max-height: 42vh;
   margin: 10px 0 0;
@@ -401,10 +422,27 @@ h1 {
   }
 
   .command-grid button,
-  .mode-switch {
+  .city-switch,
+  .verbosity-switch,
+  .thinking-switch {
     flex: 0 0 auto;
     min-height: 28px;
     padding: 0 9px;
+    font-size: 11px;
+  }
+
+  .city-switch,
+  .verbosity-switch,
+  .thinking-switch {
+    width: 156px;
+    padding: 2px;
+  }
+
+  .city-switch button,
+  .verbosity-switch button,
+  .thinking-switch button {
+    min-height: 24px;
+    padding: 0 6px;
     font-size: 11px;
   }
 

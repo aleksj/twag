@@ -13,6 +13,7 @@ from twag_clickhouse.terminal_server import (
     _answer_in_thread,
     _get_session,
     _handle_user_message,
+    _set_session_city,
     _set_session_mode,
     _sessions,
     _states,
@@ -69,7 +70,8 @@ def test_create_session_is_local_and_lazy() -> None:
     assert result["websocket"] == f"/sessions/{result['session_id']}"
 
 
-def test_ready_event_includes_city_specific_telegram_greeting() -> None:
+def test_ready_event_includes_city_specific_telegram_greeting(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://natea.github.io/twag/")
     session = TerminalSession(session_id="ready-session", city="boston")
 
     event = ready_event(session)
@@ -77,23 +79,58 @@ def test_ready_event_includes_city_specific_telegram_greeting() -> None:
     assert event["type"] == "ready"
     assert event["city"] == "boston"
     assert set(event["backend_status"]) == {"clickhouse", "subconscious"}
+    assert event["verbose"] is False
     assert event["thinking"] is False
     assert "**TWAG Boston Tech Week Bot**" in event["greeting"]
     assert "**Sponsored by Data.Flowers**" in event["greeting"]
     assert "List AI events in Cambridge" in event["greeting"]
     assert "Use concrete criteria" in event["greeting"]
-
-
-def test_mode_event_reflects_terminal_thinking_state() -> None:
-    session = TerminalSession(session_id="mode-session", city="nyc")
-
-    assert mode_event(session)["thinking"] is False
-    session.state.verbose = True
-    assert mode_event(session)["thinking"] is True
+    assert event["links"] == {
+        "map": "https://natea.github.io/twag/events_map_boston.html",
+        "gallery": "https://natea.github.io/twag/events_gallery_boston.html",
+    }
 
 
 @pytest.mark.anyio
-async def test_set_session_mode_persists_thinking_state(tmp_path, monkeypatch) -> None:
+async def test_set_session_city_sends_current_city_links(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://natea.github.io/twag/")
+
+    class WebSocket:
+        def __init__(self) -> None:
+            self.events = []
+
+        async def send_json(self, event):
+            self.events.append(event)
+
+    websocket = WebSocket()
+    session = TerminalSession(session_id="city-links-session", city="nyc")
+
+    await _set_session_city(websocket, session, "boston")  # type: ignore[arg-type]
+
+    assert websocket.events[0]["type"] == "city"
+    assert websocket.events[0]["links"] == {
+        "map": "https://natea.github.io/twag/events_map_boston.html",
+        "gallery": "https://natea.github.io/twag/events_gallery_boston.html",
+    }
+
+
+def test_mode_event_reflects_independent_terminal_modes() -> None:
+    session = TerminalSession(session_id="mode-session", city="nyc")
+
+    assert mode_event(session)["thinking"] is False
+    assert mode_event(session)["verbose"] is False
+    session.thinking_enabled = True
+    assert mode_event(session)["thinking"] is True
+    assert mode_event(session)["verbose"] is False
+    session.verbose_output = True
+    assert mode_event(session)["thinking"] is True
+    assert mode_event(session)["verbose"] is True
+
+
+@pytest.mark.anyio
+async def test_set_session_mode_persists_independent_terminal_modes(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setenv("TWAG_TERMINAL_SESSION_DIR", str(tmp_path))
 
     class WebSocket:
@@ -106,14 +143,19 @@ async def test_set_session_mode_persists_thinking_state(tmp_path, monkeypatch) -
     session = TerminalSession(session_id="mode-persist-session", city="nyc")
     websocket = WebSocket()
 
-    await _set_session_mode(websocket, session, {"thinking": True})
+    await _set_session_mode(websocket, session, {"thinking": True, "verbose": False})
 
-    assert session.state.verbose is True
+    assert session.thinking_enabled is True
+    assert session.verbose_output is False
     assert websocket.events[-1]["type"] == "mode"
     assert websocket.events[-1]["thinking"] is True
+    assert websocket.events[-1]["verbose"] is False
     _sessions.pop(session.session_id, None)
     _states.pop(session.session_id, None)
-    assert _get_session(session.session_id).state.verbose is True  # type: ignore[union-attr]
+    restored = _get_session(session.session_id)
+    assert restored is not None
+    assert restored.thinking_enabled is True
+    assert restored.verbose_output is False
 
 
 def test_terminal_operator_token_is_optional_by_default(monkeypatch) -> None:
@@ -152,11 +194,12 @@ def test_answer_in_thread_emits_status_and_final_events(monkeypatch) -> None:
     assert typed_events[-1]["text"] == "answered how many events in soho?"
 
 
-def test_answer_in_thread_does_not_emit_thinking_stream_in_quiet_mode(monkeypatch) -> None:
+def test_answer_in_thread_does_not_emit_thinking_stream_by_default(monkeypatch) -> None:
     monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
 
     class Agent:
         def ask(self, question, **kwargs):
+            assert kwargs.get("enable_thinking") is False
             assert kwargs.get("raw_stream_callback") is None
             kwargs["stream_callback"]("Answer")
             return "Answer"
@@ -167,15 +210,69 @@ def test_answer_in_thread_does_not_emit_thinking_stream_in_quiet_mode(monkeypatc
     _answer_in_thread(session, "how many events in soho?", events.append)
 
     typed_events = [event for event in events if event is not None]
-    thinking_events = [event for event in typed_events if event["type"] == "thinking_delta"]
+    detail_events = [event for event in typed_events if event["type"] == "detail_delta"]
     delta_events = [event for event in typed_events if event["type"] == "delta"]
-    assert thinking_events == []
+    assert detail_events == []
     assert delta_events[-1]["text"] == "Answer"
     assert typed_events[-1]["type"] == "final"
     assert typed_events[-1]["text"] == "Answer"
 
 
-def test_answer_in_thread_emits_folded_thinking_stream_in_verbose_terminal_mode(monkeypatch) -> None:
+def test_answer_in_thread_can_enable_thinking_without_showing_it(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            assert kwargs.get("enable_thinking") is True
+            assert kwargs.get("raw_stream_callback") is None
+            kwargs["stream_callback"]("Answer")
+            return "Answer"
+
+    session = TerminalSession(session_id="quiet-thinking-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    session.thinking_enabled = True
+    events = []
+
+    _answer_in_thread(session, "how many events in soho?", events.append)
+
+    detail_events = [
+        event for event in events if event is not None and event["type"] == "detail_delta"
+    ]
+    assert detail_events == []
+
+
+def test_answer_in_thread_can_use_verbose_output_without_thinking(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            assert kwargs.get("enable_thinking") is False
+            assert kwargs.get("raw_stream_callback") is None
+            assert callable(kwargs.get("detail_callback"))
+            kwargs["detail_callback"]("ClickHouse SQL executed.\n\nSELECT 1\n")
+            kwargs["progress_callback"]("Formatting the database rows into the final Telegram answer.")
+            kwargs["stream_callback"]("Answer")
+            return "Answer"
+
+    session = TerminalSession(session_id="verbose-nonthinking-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    session.verbose_output = True
+    events = []
+
+    _answer_in_thread(session, "how many events in soho?", events.append)
+
+    status_events = [
+        event for event in events if event is not None and event["type"] == "status"
+    ]
+    assert any(
+        event["text"] == "Formatting the database rows into the final Telegram answer."
+        for event in status_events
+    )
+    detail_events = [
+        event for event in events if event is not None and event["type"] == "detail_delta"
+    ]
+    assert detail_events[-1]["text"] == "ClickHouse SQL executed.\n\nSELECT 1\n"
+
+
+def test_answer_in_thread_emits_folded_detail_stream_when_both_modes_on(monkeypatch) -> None:
     monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
 
     class Agent:
@@ -185,16 +282,17 @@ def test_answer_in_thread_emits_folded_thinking_stream_in_verbose_terminal_mode(
             return "Answer"
 
     session = TerminalSession(session_id="verbose-thinking-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
-    session.state.verbose = True
+    session.verbose_output = True
+    session.thinking_enabled = True
     events = []
 
     _answer_in_thread(session, "how many events in soho?", events.append)
 
-    thinking_events = [
-        event for event in events if event is not None and event["type"] == "thinking_delta"
+    detail_events = [
+        event for event in events if event is not None and event["type"] == "detail_delta"
     ]
-    assert thinking_events
-    assert thinking_events[-1]["expanded"] is False
+    assert detail_events
+    assert detail_events[-1]["expanded"] is False
 
 
 def test_terminal_tool_call_filter_hides_streamed_tool_protocol() -> None:
@@ -355,7 +453,8 @@ def test_terminal_session_can_be_restored_from_disk(monkeypatch, tmp_path) -> No
     monkeypatch.setenv("TWAG_TERMINAL_SESSION_DIR", str(tmp_path))
 
     session = TerminalSession(session_id="persisted-session", city="nyc")
-    session.state.verbose = True
+    session.verbose_output = True
+    session.thinking_enabled = True
     session.state.conversation.last_event_question = "list AI events"
     session.state.conversation.last_event_offset = 25
     events = []
@@ -368,7 +467,8 @@ def test_terminal_session_can_be_restored_from_disk(monkeypatch, tmp_path) -> No
 
     assert restored is not None
     assert restored.city == "nyc"
-    assert restored.state.verbose is True
+    assert restored.verbose_output is True
+    assert restored.thinking_enabled is True
     assert restored.state.conversation.last_event_question == "list AI events"
     assert restored.state.conversation.last_event_offset == 25
 

@@ -5,6 +5,7 @@ import urllib.error
 from unittest.mock import patch
 from urllib.parse import parse_qs
 
+from twag_clickhouse.city import active_city
 from twag_clickhouse.telegram_agent import (
     ChatState,
     GREETING_REPLY,
@@ -18,8 +19,11 @@ from twag_clickhouse.telegram_agent import (
     TelegramTransientError,
     TELEGRAM_STREAM_RESET_CHARS,
     TokenUsageAccumulator,
+    TelegramBotEndpoint,
+    TelegramBotRuntime,
     answer_message,
     answer_message_with_status,
+    _chat_state_for_runtime,
     is_subjective_question,
     message_context,
     message_text,
@@ -112,11 +116,62 @@ def test_answer_message_supports_help_verbose_and_quiet_commands():
         "Verbose mode is on"
     )
     assert states[123].verbose is True
+    assert states[123].thinking_enabled is True
     assert answer_message(Agent(), states, 123, "/quiet").startswith("Quiet mode is on")
     assert states[123].verbose is False
+    assert states[123].thinking_enabled is False
     assert "/help" in HELP_REPLY
     assert "/verbose" in HELP_REPLY
     assert "/quiet" in HELP_REPLY
+
+
+def test_answer_message_supports_city_command_per_chat():
+    class Agent:
+        def ask(self, question, **kwargs):
+            return f"{active_city().slug}: {question}"
+
+    states = {123: ChatState(), 456: ChatState()}
+
+    with patch.dict("os.environ", {"TWAG_CITY": "nyc"}, clear=True):
+        assert answer_message(Agent(), states, 123, "/city boston") == (
+            "Switched to Boston Tech Week."
+        )
+        assert states[123].city == "boston"
+        assert "TWAG Boston Tech Week Bot" in answer_message(
+            Agent(), states, 123, "/help"
+        )
+        assert answer_message(Agent(), states, 123, "AI events") == "boston: AI events"
+        assert answer_message(Agent(), states, 456, "AI events") == "nyc: AI events"
+        assert os.environ["TWAG_CITY"] == "nyc"
+
+
+def test_telegram_quiet_and_verbose_control_thinking_in_unison():
+    class Agent:
+        def __init__(self):
+            self.calls = []
+
+        def ask(self, question, **kwargs):
+            self.calls.append(kwargs)
+            return "Answer"
+
+    agent = Agent()
+    states = {123: ChatState()}
+
+    assert answer_message(agent, states, 123, "AI events") == "Answer"  # type: ignore[arg-type]
+    assert agent.calls[-1]["enable_thinking"] is False
+    assert agent.calls[-1]["raw_stream_callback"] is None
+
+    answer_message(agent, states, 123, "/verbose")  # type: ignore[arg-type]
+    assert states[123].verbose is True
+    assert states[123].thinking_enabled is True
+    assert answer_message(agent, states, 123, "AI events") == "Answer"  # type: ignore[arg-type]
+    assert agent.calls[-1]["enable_thinking"] is True
+
+    answer_message(agent, states, 123, "/quiet")  # type: ignore[arg-type]
+    assert states[123].verbose is False
+    assert states[123].thinking_enabled is False
+    assert answer_message(agent, states, 123, "AI events") == "Answer"  # type: ignore[arg-type]
+    assert agent.calls[-1]["enable_thinking"] is False
 
 
 def test_subjective_question_detection():
@@ -164,7 +219,7 @@ def test_answer_message_with_status_sends_progress_updates():
 
     telegram = Telegram()
     agent = Agent()
-    states = {123: ChatState(verbose=True)}
+    states = {123: ChatState(verbose=True, thinking_enabled=True)}
 
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
@@ -219,7 +274,7 @@ def test_answer_message_with_status_shows_agent_search_stages():
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
         agent=Agent(),  # type: ignore[arg-type]
-        states={123: ChatState(verbose=True)},
+        states={123: ChatState(verbose=True, thinking_enabled=True)},
         chat_id=123,
         text="Need events about mathematics",
     )
@@ -278,7 +333,7 @@ def test_answer_message_with_status_heartbeats_during_slow_work():
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
         agent=Agent(),  # type: ignore[arg-type]
-        states={123: ChatState(verbose=True)},
+        states={123: ChatState(verbose=True, thinking_enabled=True)},
         chat_id=123,
         text="events in upper west side?",
         status_heartbeat_seconds=0.01,
@@ -456,7 +511,7 @@ def test_verbose_stream_resets_old_reasoning_to_ellipsis_before_limit():
             self.actions.append((chat_id, action))
 
     telegram = Telegram()
-    states = {123: ChatState(verbose=True)}
+    states = {123: ChatState(verbose=True, thinking_enabled=True)}
 
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
@@ -497,7 +552,7 @@ def test_verbose_mode_streams_raw_thinking_text():
             self.actions.append((chat_id, action))
 
     telegram = Telegram()
-    states = {123: ChatState(verbose=True)}
+    states = {123: ChatState(verbose=True, thinking_enabled=True)}
 
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
@@ -539,7 +594,7 @@ def test_verbose_mode_final_reply_uses_full_continued_answer():
             self.actions.append((chat_id, action))
 
     telegram = Telegram()
-    states = {123: ChatState(verbose=True)}
+    states = {123: ChatState(verbose=True, thinking_enabled=True)}
 
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
@@ -561,7 +616,7 @@ def test_verbose_mode_final_reply_uses_full_continued_answer():
 
 def test_telegram_config_reads_retry_settings():
     env = {
-        "NYC_TELEGRAM_BOT_TOKEN": "token",
+        "TELEGRAM_BOT_TOKEN": "token",
         "TELEGRAM_POLL_TIMEOUT": "20",
         "TELEGRAM_REQUEST_TIMEOUT": "35",
         "TELEGRAM_RETRY_INITIAL_SECONDS": "3",
@@ -587,7 +642,21 @@ def test_telegram_config_reads_retry_settings():
     assert config.question_log_path == "/tmp/twag-questions.jsonl"
 
 
-def test_bot_token_resolves_city_specific_var_first():
+def test_bot_token_resolves_generic_var_first():
+    env = {
+        "TWAG_CITY": "boston",
+        "TELEGRAM_BOT_TOKEN": "unified-token",
+        "BOSTON_TELEGRAM_BOT_TOKEN": "boston-token",
+        "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
+    }
+
+    with patch.dict(os.environ, env, clear=True):
+        config = TelegramAgentConfig.from_env()
+
+    assert config.bot_token == "unified-token"
+
+
+def test_bot_token_falls_back_to_city_specific_var():
     env = {
         "TWAG_CITY": "boston",
         "BOSTON_TELEGRAM_BOT_TOKEN": "boston-token",
@@ -598,6 +667,41 @@ def test_bot_token_resolves_city_specific_var_first():
         config = TelegramAgentConfig.from_env()
 
     assert config.bot_token == "boston-token"
+
+
+def test_telegram_config_polls_all_city_specific_tokens():
+    env = {
+        "TWAG_CITY": "nyc",
+        "BOSTON_TELEGRAM_BOT_TOKEN": "boston-token",
+        "NYC_TELEGRAM_BOT_TOKEN": "nyc-token",
+    }
+
+    with patch.dict(os.environ, env, clear=True):
+        config = TelegramAgentConfig.from_env()
+
+    assert [
+        (endpoint.source_env, endpoint.default_city, endpoint.token)
+        for endpoint in config.bot_endpoints
+    ] == [
+        ("BOSTON_TELEGRAM_BOT_TOKEN", "boston", "boston-token"),
+        ("NYC_TELEGRAM_BOT_TOKEN", "nyc", "nyc-token"),
+    ]
+
+
+def test_city_specific_bot_runtime_defaults_new_chats_to_that_city():
+    runtime = TelegramBotRuntime(
+        endpoint=TelegramBotEndpoint(
+            token="boston-token",
+            default_city="boston",
+            source_env="BOSTON_TELEGRAM_BOT_TOKEN",
+        ),
+        telegram=object(),  # type: ignore[arg-type]
+    )
+
+    state = _chat_state_for_runtime(runtime, 123)
+
+    assert state.city == "boston"
+    assert runtime.states[123] is state
 
 
 def test_telegram_config_reads_nyc_city_token():
@@ -628,27 +732,13 @@ def test_bot_token_rejects_old_ny_alias():
             raise AssertionError("expected ValueError")
 
 
-def test_bot_token_rejects_legacy_var():
-    legacy_token_env = "TELEGRAM" + "_BOT_TOKEN"
-    env = {
-        "TWAG_CITY": "nyc",
-        legacy_token_env: "legacy-token",
-    }
-    with patch.dict(os.environ, env, clear=True):
-        try:
-            TelegramAgentConfig.from_env()
-        except ValueError as exc:
-            assert "NYC_TELEGRAM_BOT_TOKEN" in str(exc)
-        else:
-            raise AssertionError("expected ValueError")
-
-
 def test_bot_token_raises_when_neither_var_is_set():
     env = {"TWAG_CITY": "boston"}
     with patch.dict(os.environ, env, clear=True):
         try:
             TelegramAgentConfig.from_env()
         except ValueError as exc:
+            assert "TELEGRAM_BOT_TOKEN" in str(exc)
             assert "BOSTON_TELEGRAM_BOT_TOKEN" in str(exc)
         else:
             raise AssertionError("expected ValueError")
@@ -781,7 +871,7 @@ def test_status_rate_limit_suppresses_optional_updates():
     answer = answer_message_with_status(
         telegram=telegram,  # type: ignore[arg-type]
         agent=Agent(),  # type: ignore[arg-type]
-        states={123: ChatState(verbose=True)},
+        states={123: ChatState(verbose=True, thinking_enabled=True)},
         chat_id=123,
         text="Need events about mathematics",
     )

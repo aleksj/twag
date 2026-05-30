@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from unittest.mock import patch
 
 from twag_clickhouse.chat_session import (
@@ -10,8 +12,11 @@ from twag_clickhouse.chat_session import (
     infer_date,
     map_command_query,
     map_command_reply,
+    gallery_page_url_for,
+    map_page_url_for,
     map_url_for,
 )
+from twag_clickhouse.city import active_city
 
 
 def test_answer_session_message_supports_commands_without_agent_call() -> None:
@@ -26,10 +31,45 @@ def test_answer_session_message_supports_commands_without_agent_call() -> None:
         "Verbose mode is on"
     )
     assert states["local"].verbose is True
+    assert states["local"].thinking_enabled is True
     assert answer_session_message(Agent(), states, "local", "/quiet").startswith(
         "Quiet mode is on"
     )
     assert states["local"].verbose is False
+    assert states["local"].thinking_enabled is False
+
+
+def test_answer_session_message_supports_city_switching() -> None:
+    class Agent:
+        def ask(self, question, **kwargs):
+            return f"{active_city().slug}: {question}"
+
+    states = {"local": ChatState()}
+
+    with patch.dict("os.environ", {"TWAG_CITY": "nyc"}, clear=True):
+        assert answer_session_message(Agent(), states, "local", "/city") == (
+            "Current city is NY Tech Week. Use `/city nyc` or `/city boston` to switch."
+        )
+        assert answer_session_message(Agent(), states, "local", "/city boston") == (
+            "Switched to Boston Tech Week."
+        )
+        assert states["local"].city == "boston"
+        assert "TWAG Boston Tech Week Bot" in answer_session_message(
+            Agent(), states, "local", "/help"
+        )
+        assert (
+            answer_session_message(Agent(), states, "local", "AI events")
+            == "boston: AI events"
+        )
+        assert os.environ["TWAG_CITY"] == "nyc"
+
+        assert answer_session_message(Agent(), states, "local", "/city nyc") == (
+            "Switched to NY Tech Week."
+        )
+        assert (
+            answer_session_message(Agent(), states, "local", "AI events")
+            == "nyc: AI events"
+        )
 
 
 def test_infer_date_uses_current_local_date_for_relative_terms(monkeypatch) -> None:
@@ -242,4 +282,31 @@ def test_map_url_tolerates_full_map_html_env_and_stays_city_contextual() -> None
         assert (
             map_url_for("2026-05-27")
             == "https://natea.github.io/twag/events_map_boston.html#date=2026-05-27"
+        )
+
+
+def test_public_page_urls_use_current_city() -> None:
+    with patch.dict(
+        "os.environ",
+        {"TWAG_CITY": "nyc", "TWAG_PUBLIC_MAP_BASE_URL": "https://natea.github.io/twag/"},
+        clear=True,
+    ):
+        assert map_page_url_for() == "https://natea.github.io/twag/events_map_nyc.html"
+        assert (
+            gallery_page_url_for()
+            == "https://natea.github.io/twag/events_gallery_nyc.html"
+        )
+
+    with patch.dict(
+        "os.environ",
+        {
+            "TWAG_CITY": "boston",
+            "TWAG_PUBLIC_MAP_BASE_URL": "https://natea.github.io/twag/events_map_nyc.html",
+        },
+        clear=True,
+    ):
+        assert map_page_url_for() == "https://natea.github.io/twag/events_map_boston.html"
+        assert (
+            gallery_page_url_for()
+            == "https://natea.github.io/twag/events_gallery_boston.html"
         )

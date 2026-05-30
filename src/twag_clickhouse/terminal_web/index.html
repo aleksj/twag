@@ -26,13 +26,20 @@
           <pre id="statusText">Starting session...</pre>
           <div class="panel-title">commands</div>
           <div class="command-grid">
-            <button type="button" data-command="/city nyc">NYC</button>
-            <button type="button" data-command="/city boston">Boston</button>
-            <label class="mode-switch" title="Show folded agent thinking for future queries">
-              <input id="thinkingToggle" type="checkbox">
-              <span>Thinking</span>
-            </label>
-            <button type="button" data-command="/map">Map</button>
+            <div class="city-switch" role="group" aria-label="City">
+              <button type="button" data-city="nyc" aria-pressed="false">NYC</button>
+              <button type="button" data-city="boston" aria-pressed="false">Boston</button>
+            </div>
+            <div class="verbosity-switch" role="group" aria-label="Output detail">
+              <button type="button" data-mode="quiet" aria-pressed="true">Quiet</button>
+              <button type="button" data-mode="verbose" aria-pressed="false">Verbose</button>
+            </div>
+            <div class="thinking-switch" role="group" aria-label="Model thinking">
+              <button type="button" data-thinking="off" aria-pressed="true">No thinking</button>
+              <button type="button" data-thinking="on" aria-pressed="false">Thinking</button>
+            </div>
+            <button type="button" data-open-view="map">Map</button>
+            <button type="button" data-open-view="gallery">Gallery</button>
             <button type="button" data-command="/help">Help</button>
           </div>
         </aside>

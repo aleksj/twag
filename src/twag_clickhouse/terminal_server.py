@@ -36,8 +36,10 @@ from .chat_session import (
     answer_route,
     answer_session_message,
     clear_chat_status,
+    gallery_page_url_for,
     help_reply,
     map_command_query,
+    map_page_url_for,
     map_url_for,
     question_log_route,
     update_chat_status,
@@ -204,6 +206,8 @@ class TerminalSession:
     state: ChatState = field(default_factory=ChatState)
     agent: NytwSubconsciousAgent | None = None
     map_results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    verbose_output: bool = False
+    thinking_enabled: bool = False
     backend_status: dict[str, dict[str, Any]] = field(
         default_factory=_initial_backend_status
     )
@@ -215,7 +219,7 @@ class LazySessionAgent:
 
     def ask(self, *args: Any, **kwargs: Any) -> str:
         kwargs.setdefault("max_turns", terminal_agent_max_turns())
-        kwargs.setdefault("enable_thinking", self.session.state.verbose)
+        kwargs.setdefault("enable_thinking", self.session.thinking_enabled)
         return _session_agent(self.session).ask(*args, **kwargs)
 
 
@@ -252,6 +256,7 @@ def _state_snapshot(state: ChatState) -> dict[str, Any]:
             ],
         },
         "verbose": state.verbose,
+        "thinking_enabled": state.thinking_enabled,
     }
 
 
@@ -290,6 +295,7 @@ def _restore_state(snapshot: dict[str, Any] | None) -> ChatState:
                     )
                 )
     state.verbose = bool(snapshot.get("verbose"))
+    state.thinking_enabled = bool(snapshot.get("thinking_enabled"))
     return state
 
 
@@ -304,6 +310,8 @@ def _save_session(session: TerminalSession) -> None:
         "updated_at": time.time(),
         "state": _state_snapshot(session.state),
         "map_results": session.map_results,
+        "verbose_output": session.verbose_output,
+        "thinking_enabled": session.thinking_enabled,
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -328,6 +336,8 @@ def _load_session(session_id: str) -> TerminalSession | None:
             city=city.slug,
             state=state,
             map_results=map_results if isinstance(map_results, dict) else {},
+            verbose_output=bool(snapshot.get("verbose_output")),
+            thinking_enabled=bool(snapshot.get("thinking_enabled")),
         )
     except Exception:
         LOGGER.exception("Could not restore terminal session")
@@ -631,22 +641,31 @@ def create_session(request: SessionCreateRequest | None = None) -> dict[str, Any
 def ready_event(session: TerminalSession) -> dict[str, Any]:
     with active_city_override(session.city):
         greeting = help_reply()
+        links = _session_public_links()
     return {
         "type": "ready",
         "session_id": session.session_id,
         "city": session.city,
-        "verbose": session.state.verbose,
-        "thinking": session.state.verbose,
+        "verbose": session.verbose_output,
+        "thinking": session.thinking_enabled,
         "greeting": greeting,
         "backend_status": session.backend_status,
+        "links": links,
     }
 
 
 def mode_event(session: TerminalSession) -> dict[str, Any]:
     return {
         "type": "mode",
-        "thinking": session.state.verbose,
-        "verbose": session.state.verbose,
+        "thinking": session.thinking_enabled,
+        "verbose": session.verbose_output,
+    }
+
+
+def _session_public_links() -> dict[str, str]:
+    return {
+        "map": map_page_url_for(),
+        "gallery": gallery_page_url_for(),
     }
 
 
@@ -823,12 +842,15 @@ async def _set_session_city(
     session.backend_status = _initial_backend_status()
     _states[session.session_id] = session.state
     _save_session(session)
+    with active_city_override(session.city):
+        links = _session_public_links()
     await websocket.send_json(
         {
             "type": "city",
             "city": city.slug,
             "display_name": city.display_name,
             "message": f"Switched to {city.short_name}.",
+            "links": links,
         }
     )
     await websocket.send_json(mode_event(session))
@@ -839,7 +861,10 @@ async def _set_session_mode(
     session: TerminalSession,
     payload: dict[str, Any],
 ) -> None:
-    session.state.verbose = bool(payload.get("thinking"))
+    if "thinking" in payload:
+        session.thinking_enabled = bool(payload.get("thinking"))
+    if "verbose" in payload:
+        session.verbose_output = bool(payload.get("verbose"))
     _save_session(session)
     await websocket.send_json(mode_event(session))
 
@@ -928,7 +953,7 @@ def _answer_in_thread(
 
     def emit_status(step: str) -> None:
         nonlocal last_status_step
-        display_step = terminal_status_step(step)
+        display_step = step if session.verbose_output else terminal_status_step(step)
         if not display_step or display_step == last_status_step:
             return
         last_status_step = display_step
@@ -942,9 +967,12 @@ def _answer_in_thread(
         if partial:
             emit({"type": "delta", "text": partial, "mode": "replace"})
 
-    def raw_stream(chunk: str) -> None:
+    def detail_stream(chunk: str) -> None:
         if chunk:
-            emit({"type": "thinking_delta", "text": chunk, "expanded": False})
+            emit({"type": "detail_delta", "text": chunk, "expanded": False})
+
+    def raw_stream(chunk: str) -> None:
+        detail_stream(chunk)
 
     try:
         with _city_lock:
@@ -987,7 +1015,12 @@ def _answer_in_thread(
                     question_text,
                     progress=progress,
                     stream_callback=visible_stream,
-                    raw_stream_callback=raw_stream if state.verbose else None,
+                    raw_stream_callback=(
+                        raw_stream
+                        if session.verbose_output and session.thinking_enabled
+                        else None
+                    ),
+                    detail_callback=detail_stream if session.verbose_output else None,
                     token_usage_callback=usage.add,
                 )
                 map_link = _terminal_map_link(session)

@@ -69,14 +69,14 @@ large; generated thumbnails and gallery JSON are the deployable web assets.
 
 The agent side loads city data into ClickHouse, mirrors the Senso knowledge base
 into `senso_*` tables, and exposes a guarded query path to Subconscious,
-Telegram, and the browser terminal. The Telegram workers run as independent
-long-polling processes, one token per city, so the NY and Boston bots can
-coexist on one host.
+Telegram, and the browser terminal. One Telegram long-polling process can serve
+the unified bot or both city bot accounts; users can still switch per chat with
+`/city nyc` or `/city boston`.
 
 What it took: city-aware config, two event datasets, hundreds of geocoded
 venues, a static map/gallery build, image compression, ClickHouse loaders, a
 Senso sync cache that avoids re-downloading known files, read-only SQL
-guardrails, per-city Telegram token resolution, rate-limit handling, systemd
+guardrails, Telegram city switching, rate-limit handling, systemd
 deploy units, and tests for the multi-city behavior.
 
 ## Subconscious + data.flowers
@@ -139,7 +139,7 @@ flowchart LR
   end
 
   subgraph Users["User surfaces"]
-    O["Telegram bots<br/>@Twagbot / @TwagBostonBot"]
+    O["Telegram bots<br/>@Twagbot / @TwagBostonBot with /city"]
     P["Browser terminal<br/>data.flowers/tw"]
     Q["Static maps + galleries"]
   end
@@ -222,9 +222,10 @@ SUBCONSCIOUS_ENABLE_THINKING=true
 and query planning. TWAG disables thinking on the final presentation turn so
 Telegram and terminal users see answers, not formatting deliberation.
 
-Telegram bots:
+Telegram bot:
 
 ```bash
+TELEGRAM_BOT_TOKEN=
 NYC_TELEGRAM_BOT_TOKEN=
 BOSTON_TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_CHAT_IDS=
@@ -233,9 +234,12 @@ TELEGRAM_REQUEST_TIMEOUT=45
 TELEGRAM_QUESTION_LOG_PATH=logs/twag-telegram-questions.jsonl
 ```
 
-Define one token per city. `TWAG_CITY=nyc` reads `NYC_TELEGRAM_BOT_TOKEN`;
-`TWAG_CITY=boston` reads `BOSTON_TELEGRAM_BOT_TOKEN`. In production, run only
-one polling process per Telegram token.
+Run one Telegram polling process. Users can switch datasets inside the chat
+with `/city nyc` or `/city boston`. `TWAG_CITY` only sets the default city for
+new chats when `TELEGRAM_BOT_TOKEN` is set. If `TELEGRAM_BOT_TOKEN` is unset,
+the same process polls each configured city account from
+`NYC_TELEGRAM_BOT_TOKEN` and/or `BOSTON_TELEGRAM_BOT_TOKEN`; new chats in those
+accounts start in that account's city, and `/city` still works.
 
 Telegram logs each answered question, user/chat metadata, route, duration,
 answer text, and token usage as JSONL when `TELEGRAM_QUESTION_LOG_PATH` is set.
@@ -322,26 +326,27 @@ Then open `http://localhost:8085/events_map_boston.html`,
 
 ### Run The Bots
 
-For local development, run each city in its own shell:
+For local development, run one Telegram bot shell:
 
 ```bash
-TWAG_CITY=nyc TELEGRAM_AGENT_LOCK_FILE=.telegram-agent-nyc.lock twag telegram-agent
-TWAG_CITY=boston TELEGRAM_AGENT_LOCK_FILE=.telegram-agent-boston.lock twag telegram-agent
+TWAG_CITY=nyc TELEGRAM_AGENT_LOCK_FILE=.telegram-agent.lock twag telegram-agent
 ```
 
-On Ubuntu, the deploy scripts install separate systemd units for both bots,
-the sync agent, and the browser terminal backend:
+On Ubuntu, the deploy scripts install one Telegram bot, the sync agent, and the
+browser terminal backend:
 
 ```bash
-RUN_REMOTE_INSTALL=true deploy/ubuntu/rsync.privileged.sh
-
-sudo systemctl enable --now twag-telegram-agent@$USER.service
-sudo systemctl enable --now twag-telegram-agent-boston@$USER.service
-sudo systemctl enable --now twag-sync-agent@$USER.service
-sudo systemctl enable --now twag-terminal@$USER.service
-
-deploy/ubuntu/control.sh status
+RUN_REMOTE_INSTALL=true \
+DEPLOY_TERMINAL_STATIC=true \
+REMOTE_SERVICE_ACTION=restart \
+deploy/ubuntu/deploy.sh
 ```
+
+The deploy script loads remotes from the ignored `.env`, syncs the backend,
+syncs `/etc/twag/twag.env`, publishes the static browser shell when
+`DEPLOY_TERMINAL_STATIC=true`, and restarts the three systemd services by
+default. For a first deploy where services are not enabled yet, use
+`REMOTE_SERVICE_ACTION=start`.
 
 The browser terminal has two deployable pieces: the Python backend on the
 process host, and the static shell served at `/tw/` on the public web host.
@@ -358,15 +363,16 @@ uv run python scripts/build_terminal_static.py --output build/terminal-static --
 Publish it from the deployment environment:
 
 ```bash
-TWAG_TERMINAL_STATIC_REMOTE=root@data.flowers \
-TWAG_TERMINAL_STATIC_REMOTE_DIR=/var/www/html/tw \
-deploy/terminal-static.sh
+TWAG_TERMINAL_STATIC_REMOTE=deploy-user@static-host.example \
+TWAG_TERMINAL_STATIC_REMOTE_DIR=/path/to/public/tw \
+deploy/deploy-static.sh
 ```
 
-Set `DEPLOY_TERMINAL_STATIC=true` to make the Ubuntu rsync deploy run the same
-static publish step after syncing the backend. CI/CD should run the static
-builder and tests; if `app.js` or `styles.css` changes, the generated URL
-changes automatically.
+Set `DEPLOY_TERMINAL_STATIC=true` to make the Ubuntu deploy run the same
+static publish step after syncing the backend. This requires
+`TWAG_TERMINAL_STATIC_REMOTE` in `.env`; the script now fails before syncing if
+that target is missing. CI/CD should run the static builder and tests; if
+`app.js` or `styles.css` changes, the generated URL changes automatically.
 
 The browser terminal keeps lightweight session snapshots in
 `TWAG_TERMINAL_SESSION_DIR` so follow-up commands such as `more` can survive a
@@ -383,7 +389,6 @@ Useful logs:
 
 ```bash
 journalctl -u twag-telegram-agent@$USER.service -f
-journalctl -u twag-telegram-agent-boston@$USER.service -f
 journalctl -u twag-sync-agent@$USER.service -f
 journalctl -u twag-terminal@$USER.service -f
 ```
