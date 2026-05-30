@@ -117,6 +117,52 @@ def test_answer_in_thread_emits_status_and_final_events(monkeypatch) -> None:
     assert typed_events[-1]["text"] == "answered how many events in soho?"
 
 
+def test_answer_in_thread_emits_folded_thinking_stream_for_terminal(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            kwargs["raw_stream_callback"]("<think>plan")
+            kwargs["raw_stream_callback"]("</think>Answer")
+            kwargs["stream_callback"]("Answer")
+            return "Answer"
+
+    session = TerminalSession(session_id="thinking-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "how many events in soho?", events.append)
+
+    typed_events = [event for event in events if event is not None]
+    thinking_events = [event for event in typed_events if event["type"] == "thinking_delta"]
+    delta_events = [event for event in typed_events if event["type"] == "delta"]
+    assert [event["text"] for event in thinking_events] == ["<think>plan", "</think>Answer"]
+    assert all(event["expanded"] is False for event in thinking_events)
+    assert delta_events[-1]["text"] == "Answer"
+    assert typed_events[-1]["type"] == "final"
+    assert typed_events[-1]["text"] == "Answer"
+
+
+def test_answer_in_thread_expands_thinking_stream_in_verbose_terminal_mode(monkeypatch) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            kwargs["raw_stream_callback"]("<think>plan</think>")
+            return "Answer"
+
+    session = TerminalSession(session_id="verbose-thinking-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    session.state.verbose = True
+    events = []
+
+    _answer_in_thread(session, "how many events in soho?", events.append)
+
+    thinking_events = [
+        event for event in events if event is not None and event["type"] == "thinking_delta"
+    ]
+    assert thinking_events
+    assert thinking_events[-1]["expanded"] is True
+
+
 def test_terminal_tool_call_filter_hides_streamed_tool_protocol() -> None:
     stream_filter = _TerminalToolCallFilter()
     chunks = [

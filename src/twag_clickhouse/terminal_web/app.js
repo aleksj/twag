@@ -13,6 +13,8 @@ const state = {
   sessionId: '',
   city: '',
   draftNode: null,
+  thinkingNode: null,
+  thinkingRenderFrame: 0,
   draftRenderFrame: 0,
   operatorToken: '',
   greetingShown: false,
@@ -305,6 +307,68 @@ function setDraft(text, mode) {
   scheduleDraftRender();
 }
 
+function renderThinkingNow() {
+  if (!state.thinkingNode) return;
+
+  const content = state.thinkingNode.querySelector('.thinking-content');
+  const raw = content.dataset.raw || '';
+  if (content.dataset.renderedRaw === raw) return;
+
+  const shouldScroll = transcriptIsNearBottom();
+  const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
+  content.textContent = raw;
+  content.dataset.renderedRaw = raw;
+
+  if (shouldScroll) scrollTranscriptToBottom();
+  else transcript.scrollTop = transcript.scrollHeight - beforeBottom;
+}
+
+function scheduleThinkingRender() {
+  if (state.thinkingRenderFrame) return;
+  state.thinkingRenderFrame = window.requestAnimationFrame(() => {
+    state.thinkingRenderFrame = 0;
+    renderThinkingNow();
+  });
+}
+
+function appendThinking(text, expanded = false) {
+  if (!state.thinkingNode) {
+    const row = appendMessage('thinking', '', 'thinking', { forceScroll: transcriptIsNearBottom() });
+    const content = row.querySelector('.content');
+    content.innerHTML = '';
+
+    const details = document.createElement('details');
+    details.className = 'thinking-details';
+    details.open = Boolean(expanded);
+
+    const summary = document.createElement('summary');
+    summary.textContent = 'thinking';
+
+    const pre = document.createElement('pre');
+    pre.className = 'thinking-content';
+
+    details.append(summary, pre);
+    content.append(details);
+    state.thinkingNode = row;
+  }
+
+  const content = state.thinkingNode.querySelector('.thinking-content');
+  const previous = content.dataset.raw || '';
+  const next = previous + String(text || '');
+  if (next === previous) return;
+  content.dataset.raw = next;
+  scheduleThinkingRender();
+}
+
+function finishThinking() {
+  if (state.thinkingRenderFrame) {
+    window.cancelAnimationFrame(state.thinkingRenderFrame);
+    state.thinkingRenderFrame = 0;
+    renderThinkingNow();
+  }
+  state.thinkingNode = null;
+}
+
 function clearDraft() {
   if (state.draftRenderFrame) {
     window.cancelAnimationFrame(state.draftRenderFrame);
@@ -314,6 +378,7 @@ function clearDraft() {
     state.draftNode.remove();
     state.draftNode = null;
   }
+  finishThinking();
 }
 
 function socketIsOpen() {
@@ -366,6 +431,7 @@ function submitPromptText(rawText) {
   }
 
   clearDraft();
+  finishThinking();
   state.inFlightPrompt = text;
   if (!send({ type: 'message', text })) return false;
   promptInput.value = '';
@@ -447,8 +513,11 @@ function connect(session, options = {}) {
       appendStatus(event.step || event.text || '');
     } else if (event.type === 'delta') {
       setDraft(event.text || '', event.mode);
+    } else if (event.type === 'thinking_delta') {
+      appendThinking(event.text || '', event.expanded);
     } else if (event.type === 'final') {
       state.inFlightPrompt = '';
+      finishThinking();
       const shouldScroll = transcriptIsNearBottom();
       if (state.draftNode) {
         if (state.draftRenderFrame) {
@@ -475,6 +544,7 @@ function connect(session, options = {}) {
       appendStatus(`Done. Duration: ${event.duration_ms || 0}ms${tokenLine}`);
     } else if (event.type === 'error') {
       clearDraft();
+      finishThinking();
       state.inFlightPrompt = '';
       setConnection('error');
       const summary = errorSummary(event);

@@ -226,6 +226,10 @@ h1 {
   color: var(--danger);
 }
 
+.message.thinking .role {
+  color: var(--muted);
+}
+
 .content {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -251,6 +255,30 @@ h1 {
 .content a:focus-visible {
   color: var(--accent);
   outline: none;
+}
+
+.thinking-details {
+  color: var(--muted);
+}
+
+.thinking-details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--accent-2);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.thinking-content {
+  overflow: auto;
+  max-height: 42vh;
+  margin: 10px 0 0;
+  padding: 10px;
+  border: 1px solid rgba(58, 52, 41, 0.7);
+  background: #0f0e0c;
+  color: var(--muted);
+  white-space: pre-wrap;
 }
 
 .prompt {

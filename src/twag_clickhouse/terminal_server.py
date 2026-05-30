@@ -904,7 +904,6 @@ def _answer_in_thread(
     error: str | None = None
     answer = ""
     started_at = time.monotonic()
-    tool_call_filter = _TerminalToolCallFilter()
     last_status_step: str | None = None
 
     def emit_status(step: str) -> None:
@@ -924,9 +923,8 @@ def _answer_in_thread(
             emit({"type": "delta", "text": partial, "mode": "replace"})
 
     def raw_stream(chunk: str) -> None:
-        visible_chunk = tool_call_filter.feed(chunk)
-        if visible_chunk:
-            emit({"type": "delta", "text": visible_chunk, "mode": "append"})
+        if chunk:
+            emit({"type": "thinking_delta", "text": chunk, "expanded": state.verbose})
 
     try:
         with _city_lock:
@@ -962,16 +960,14 @@ def _answer_in_thread(
                 if uses_clickhouse or uses_model:
                     emit(_backend_status_event(session))
 
-                stream_callback = (lambda _partial: None) if state.verbose else visible_stream
-                raw_stream_callback = raw_stream if state.verbose else (lambda _chunk: None)
                 answer = answer_session_message(
                     LazySessionAgent(session),
                     _states,
                     session.session_id,
                     question_text,
                     progress=progress,
-                    stream_callback=stream_callback,
-                    raw_stream_callback=raw_stream_callback,
+                    stream_callback=visible_stream,
+                    raw_stream_callback=raw_stream,
                     token_usage_callback=usage.add,
                 )
                 map_link = _terminal_map_link(session)
