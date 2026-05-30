@@ -133,9 +133,28 @@ def terminal_query_heartbeat_seconds() -> float:
     return _env_float("TWAG_TERMINAL_QUERY_HEARTBEAT_SECONDS", 20.0, minimum=0.5)
 
 
+def public_terminal_base_url() -> str:
+    return os.getenv("TWAG_PUBLIC_TERMINAL_BASE_URL", "").strip().rstrip("/")
+
+
+def terminal_result_maps_enabled() -> bool:
+    raw = os.getenv("TWAG_TERMINAL_RESULT_MAPS_ENABLED", "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def terminal_elapsed_label(elapsed: float) -> str:
+    if elapsed < 1:
+        return "less than 1s"
+    return f"{int(elapsed)}s"
+
+
+def terminal_query_timeout_summary(elapsed: float) -> str:
+    return f"Stopped after {terminal_elapsed_label(elapsed)}. Try a narrower query."
+
+
 def terminal_query_timeout_reply(text: str, elapsed: float) -> str:
     return (
-        f"TWAG is still working after {int(elapsed)}s, so this browser turn was "
+        f"TWAG is still working after {terminal_elapsed_label(elapsed)}, so this browser turn was "
         "stopped instead of waiting silently.\n\n"
         "Try a narrower follow-up, for example:\n"
         "- events added since yesterday\n"
@@ -465,12 +484,18 @@ def terminal_asset(asset: str) -> FileResponse:
 
 
 @app.get("/terminal/map/{session_id}/{map_id}.geojson")
-def terminal_result_map_geojson(session_id: str, map_id: str) -> dict[str, Any]:
+def terminal_result_map_geojson(
+    session_id: str,
+    map_id: str,
+    response: Response,
+) -> dict[str, Any]:
     session = _get_session(session_id)
     if session is None or map_id not in session.map_results:
         raise HTTPException(status_code=404, detail="Unknown map result")
     result = session.map_results[map_id]
     features = list(result.get("features") or [])
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET"
     return {
         "type": "FeatureCollection",
         "features": features,
@@ -647,7 +672,17 @@ def _features_for_event_ids(city_slug: str, event_ids: list[str]) -> list[dict[s
     return features
 
 
+def _terminal_result_geojson_url(session: TerminalSession, map_id: str) -> str:
+    public_base = public_terminal_base_url()
+    if public_base:
+        return f"{public_base}/map/{session.session_id}/{map_id}.geojson"
+    return f"/terminal/map/{session.session_id}/{map_id}.geojson"
+
+
 def _terminal_map_link(session: TerminalSession) -> str:
+    if not terminal_result_maps_enabled():
+        return ""
+
     rows = list(getattr(session.agent, "last_event_map_rows", []) or [])
     event_ids = []
     seen = set()
@@ -686,9 +721,15 @@ def _terminal_map_link(session: TerminalSession) -> str:
 
     date_iso = (dates or [load_city(session.city).default_map_date])[0]
     public_url = map_url_for(date_iso)
-    if public_url:
+    result_url = _terminal_result_geojson_url(session, map_id)
+    if public_url and public_terminal_base_url():
         separator = "&" if "#" in public_url else "#"
-        fragment = urlencode({"event_ids": ",".join(event_ids)})
+        fragment = urlencode(
+            {
+                "result_url": result_url,
+                "event_ids": ",".join(event_ids),
+            }
+        )
         return f"\n\n[View on map]({public_url}{separator}{fragment})"
     return f"\n\n[View on map](/terminal/map/{session.session_id}/{map_id})"
 
@@ -703,6 +744,14 @@ def _terminal_map_command_search_query(text: str) -> str:
     if lowered.startswith(("event ", "events ")):
         return f"list {query}"
     return f"list events matching {query}"
+
+
+def _terminal_result_map_disabled_reply() -> str:
+    return (
+        "Filtered terminal result maps are temporarily disabled. "
+        "The public event maps still work for date browsing with `/map YYYY-MM-DD`, "
+        "but search-result maps need the canonical map page to support `result_url` first."
+    )
 
 
 @app.websocket("/sessions/{session_id}")
@@ -792,18 +841,41 @@ async def _handle_user_message(
 
     worker = asyncio.create_task(asyncio.to_thread(_answer_in_thread, session, text, emit))
 
+    async def send_timeout_error() -> None:
+        elapsed = time.monotonic() - started_at
+        _set_backend_service(session, "clickhouse", "error")
+        _set_backend_service(session, "subconscious", "error")
+        _save_session(session)
+        await websocket.send_json(_backend_status_event(session))
+        await websocket.send_json(
+            {
+                "type": "error",
+                "error": terminal_query_timeout_reply(text, elapsed),
+                "summary": terminal_query_timeout_summary(elapsed),
+                "route": question_log_route(text),
+                "duration_ms": int(elapsed * 1000),
+            }
+        )
+        LOGGER.warning(
+            "Terminal query timed out after %.1fs for session %s",
+            elapsed,
+            session.session_id,
+        )
+
     while True:
         elapsed = time.monotonic() - started_at
         remaining = timeout_seconds - elapsed
         if remaining <= 0:
-            break
+            await send_timeout_error()
+            return
         wait_seconds = min(heartbeat_seconds, remaining)
         try:
             event = await asyncio.wait_for(queue.get(), timeout=wait_seconds)
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - started_at
             if elapsed >= timeout_seconds:
-                break
+                await send_timeout_error()
+                return
             if elapsed - last_heartbeat_elapsed >= heartbeat_seconds - 0.05:
                 await websocket.send_json(
                     {
@@ -815,31 +887,9 @@ async def _handle_user_message(
                 last_heartbeat_elapsed = elapsed
             continue
         if event is None:
-            break
+            await worker
+            return
         await websocket.send_json(event)
-
-    if worker.done():
-        await worker
-        return
-
-    elapsed = time.monotonic() - started_at
-    _set_backend_service(session, "clickhouse", "error")
-    _set_backend_service(session, "subconscious", "error")
-    _save_session(session)
-    await websocket.send_json(_backend_status_event(session))
-    await websocket.send_json(
-        {
-            "type": "error",
-            "error": terminal_query_timeout_reply(text, elapsed),
-            "route": question_log_route(text),
-            "duration_ms": int(elapsed * 1000),
-        }
-    )
-    LOGGER.warning(
-        "Terminal query timed out after %.1fs for session %s",
-        elapsed,
-        session.session_id,
-    )
 
 
 def _answer_in_thread(
@@ -881,6 +931,18 @@ def _answer_in_thread(
     try:
         with _city_lock:
             with active_city_override(session.city):
+                if map_command_query(text) and not terminal_result_maps_enabled():
+                    answer = _terminal_result_map_disabled_reply()
+                    emit(
+                        {
+                            "type": "final",
+                            "text": answer,
+                            "route": question_log_route(text),
+                            "usage": usage.as_dict(),
+                            "duration_ms": int((time.monotonic() - started_at) * 1000),
+                        }
+                    )
+                    return
                 agent_text = _terminal_map_command_search_query(text)
                 question_text = agent_text or text
                 route, first_step = answer_route(question_text, state)

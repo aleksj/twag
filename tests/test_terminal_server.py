@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import quote
 
 import pytest
+from fastapi.responses import Response
 
 from twag_clickhouse.terminal_server import (
     SessionCreateRequest,
@@ -24,6 +26,8 @@ from twag_clickhouse.terminal_server import (
     terminal_index,
     terminal_result_map,
     terminal_result_map_geojson,
+    terminal_query_timeout_reply,
+    terminal_query_timeout_summary,
 )
 
 
@@ -34,6 +38,15 @@ def test_terminal_server_metadata_endpoints() -> None:
 
     city_slugs = {city["slug"] for city in cities()["cities"]}
     assert {"nyc", "boston"} <= city_slugs
+
+
+def test_terminal_timeout_message_uses_human_elapsed_label() -> None:
+    reply = terminal_query_timeout_reply("events added?", 0.45)
+    summary = terminal_query_timeout_summary(0.45)
+
+    assert "after 0s" not in reply
+    assert "after less than 1s" in reply
+    assert summary == "Stopped after less than 1s. Try a narrower query."
 
 
 def test_terminal_server_serves_browser_terminal_assets() -> None:
@@ -156,6 +169,40 @@ async def test_handle_user_message_times_out_with_recovery_guidance(monkeypatch)
     assert "what has changed from yesterday?" in error_events[-1]["error"]
 
 
+@pytest.mark.anyio
+async def test_handle_user_message_final_sentinel_wins_over_worker_done_race(monkeypatch) -> None:
+    class WebSocket:
+        def __init__(self) -> None:
+            self.events = []
+
+        async def send_json(self, event):
+            self.events.append(event)
+
+    def complete_then_linger(_session, _text, emit):
+        emit({"type": "final", "text": "done", "duration_ms": 1})
+        emit(None)
+        time.sleep(0.05)
+
+    monkeypatch.setattr(
+        "twag_clickhouse.terminal_server.terminal_query_timeout_seconds",
+        lambda: 1.0,
+    )
+    monkeypatch.setattr(
+        "twag_clickhouse.terminal_server.terminal_query_heartbeat_seconds",
+        lambda: 0.01,
+    )
+    monkeypatch.setattr(
+        "twag_clickhouse.terminal_server._answer_in_thread",
+        complete_then_linger,
+    )
+    websocket = WebSocket()
+    session = TerminalSession(session_id="complete-race-session", city="nyc")
+
+    await _handle_user_message(websocket, session, "events added since yesterday")
+
+    assert [event["type"] for event in websocket.events] == ["final"]
+
+
 def test_answer_in_thread_emits_backend_readiness_events(monkeypatch) -> None:
     monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
 
@@ -254,6 +301,10 @@ def test_answer_in_thread_tracks_more_without_unbacked_map_link(monkeypatch) -> 
 
 
 def test_answer_in_thread_adds_map_link_for_mapped_event_results(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+    monkeypatch.delenv("TWAG_PUBLIC_TERMINAL_BASE_URL", raising=False)
+    monkeypatch.setenv("TWAG_TERMINAL_RESULT_MAPS_ENABLED", "true")
+
     class Agent:
         def ask(self, question, **_kwargs):
             self.last_event_map_rows = [{"event_id": "mapped-1"}]
@@ -290,9 +341,11 @@ def test_answer_in_thread_adds_map_link_for_mapped_event_results(monkeypatch, tm
     assert "/terminal/map/mapped-session/" in final_text
 
     map_id = next(iter(session.map_results))
-    geojson = terminal_result_map_geojson(session.session_id, map_id)
+    response = Response()
+    geojson = terminal_result_map_geojson(session.session_id, map_id, response)
     assert geojson["metadata"]["count"] == 1
     assert geojson["features"][0]["properties"]["event_id"] == "mapped-1"
+    assert response.headers["Access-Control-Allow-Origin"] == "*"
 
     map_response = terminal_result_map(session.session_id, map_id)
     html = map_response.body.decode()
@@ -336,6 +389,8 @@ def test_map_command_with_query_generates_filtered_result_map(monkeypatch, tmp_p
         encoding="utf-8",
     )
     monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://natea.github.io/twag/")
+    monkeypatch.setenv("TWAG_PUBLIC_TERMINAL_BASE_URL", "https://data.flowers/tw/terminal")
+    monkeypatch.setenv("TWAG_TERMINAL_RESULT_MAPS_ENABLED", "true")
     monkeypatch.setattr("twag_clickhouse.terminal_server.DOCS_DIR", tmp_path)
     session = TerminalSession(session_id="map-search-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
     events = []
@@ -346,16 +401,41 @@ def test_map_command_with_query_generates_filtered_result_map(monkeypatch, tmp_p
     final_text = typed_events[-1]["text"]
     assert final_text.startswith("Showing 1-1 of 1 matching event.")
     assert "**Columbia event**" in final_text
+    map_id = next(iter(session.map_results))
+    result_url = quote(
+        f"https://data.flowers/tw/terminal/map/map-search-session/{map_id}.geojson",
+        safe="",
+    )
     assert (
         "[View on map](https://natea.github.io/twag/events_map_nyc.html"
-        "#date=2026-06-02&event_ids=columbia-1)"
+        f"#date=2026-06-02&result_url={result_url}&event_ids=columbia-1)"
     ) in final_text
     assert session.agent.calls == ["list events at Columbia University"]  # type: ignore[union-attr]
 
-    map_id = next(iter(session.map_results))
-    geojson = terminal_result_map_geojson(session.session_id, map_id)
+    geojson = terminal_result_map_geojson(session.session_id, map_id, Response())
     assert geojson["metadata"]["count"] == 1
     assert geojson["features"][0]["properties"]["event_id"] == "columbia-1"
+
+
+def test_map_command_with_query_is_disabled_until_public_map_supports_results(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_PUBLIC_MAP_BASE_URL", "https://natea.github.io/twag/")
+    monkeypatch.delenv("TWAG_TERMINAL_RESULT_MAPS_ENABLED", raising=False)
+
+    class Agent:
+        def ask(self, question, **kwargs):
+            raise AssertionError("disabled map search should not call agent")
+
+    session = TerminalSession(session_id="disabled-map-search-session", city="nyc", agent=Agent())  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "/map events at Columbia University", events.append)
+
+    typed_events = [event for event in events if event is not None]
+    assert typed_events[-1]["type"] == "final"
+    assert "temporarily disabled" in typed_events[-1]["text"]
+    assert "`/map YYYY-MM-DD`" in typed_events[-1]["text"]
+    assert "result_url" in typed_events[-1]["text"]
+    assert session.map_results == {}
 
 
 def test_map_command_with_plain_date_keeps_static_map_behavior(monkeypatch) -> None:

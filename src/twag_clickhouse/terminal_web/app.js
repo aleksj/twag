@@ -14,7 +14,6 @@ const state = {
   city: '',
   draftNode: null,
   draftRenderFrame: 0,
-  turnStatusNode: null,
   operatorToken: '',
   greetingShown: false,
   lastStatusLine: '',
@@ -98,6 +97,20 @@ function appendStatus(text) {
   statusText.textContent = lines.slice(-120).join('\n');
   state.lastStatusLine = cleanText;
   if (shouldScroll) statusText.scrollTop = statusText.scrollHeight;
+}
+
+function compactStatusText(text) {
+  return String(text || '')
+    .trim()
+    .split(/\n+/)[0]
+    .replace(/\s+/g, ' ');
+}
+
+function errorSummary(event) {
+  if (event?.summary) return compactStatusText(event.summary);
+  const text = compactStatusText(event?.error || 'Unknown error.');
+  if (/try a narrower/i.test(text)) return 'Stopped. Try a narrower query.';
+  return text.replace(/^Error:\s*/i, '');
 }
 
 function escapeHtml(text) {
@@ -237,12 +250,6 @@ function scrollTranscriptToBottom() {
   transcript.scrollTop = transcript.scrollHeight;
 }
 
-function scrollMessageToStart(row) {
-  const transcriptBox = transcript.getBoundingClientRect();
-  const rowBox = row.getBoundingClientRect();
-  transcript.scrollTop += rowBox.top - transcriptBox.top - 8;
-}
-
 function appendMessage(role, text, className = '', options = {}) {
   const shouldScroll = options.forceScroll || transcriptIsNearBottom();
   const row = document.createElement('article');
@@ -262,32 +269,6 @@ function appendMessage(role, text, className = '', options = {}) {
   return row;
 }
 
-function setTurnStatus(text, stateName = 'working') {
-  const cleanText = String(text || '').trim();
-  if (!cleanText) return;
-
-  const shouldScroll = transcriptIsNearBottom();
-  if (!state.turnStatusNode) {
-    state.turnStatusNode = appendMessage('system', '', 'turn-status', {
-      forceScroll: shouldScroll,
-    });
-    state.turnStatusNode.querySelector('.role').textContent = 'status';
-  }
-
-  const content = state.turnStatusNode.querySelector('.content');
-  content.textContent = cleanText;
-  state.turnStatusNode.dataset.turnState = stateName;
-  transcript.append(state.turnStatusNode);
-  if (shouldScroll) scrollTranscriptToBottom();
-}
-
-function clearTurnStatus() {
-  if (state.turnStatusNode) {
-    state.turnStatusNode.remove();
-    state.turnStatusNode = null;
-  }
-}
-
 function renderDraftNow() {
   if (!state.draftNode) return;
 
@@ -297,7 +278,7 @@ function renderDraftNow() {
 
   const shouldScroll = transcriptIsNearBottom();
   const beforeBottom = transcript.scrollHeight - transcript.scrollTop;
-  content.innerHTML = markdownToHtml(raw);
+  content.textContent = raw;
   content.dataset.renderedRaw = raw;
 
   if (shouldScroll) scrollTranscriptToBottom();
@@ -385,12 +366,10 @@ function submitPromptText(rawText) {
   }
 
   clearDraft();
-  clearTurnStatus();
   state.inFlightPrompt = text;
   if (!send({ type: 'message', text })) return false;
   promptInput.value = '';
   appendMessage('user', text, '', { forceScroll: true });
-  setTurnStatus('In progress: sent to TWAG.', 'working');
   appendStatus('Sent. Waiting for TWAG...');
   return true;
 }
@@ -466,7 +445,6 @@ function connect(session, options = {}) {
       setBackendStatus(event.services || {});
     } else if (event.type === 'status') {
       appendStatus(event.step || event.text || '');
-      setTurnStatus(`In progress: ${event.step || event.text || 'working'}`, 'working');
     } else if (event.type === 'delta') {
       setDraft(event.text || '', event.mode);
     } else if (event.type === 'final') {
@@ -488,22 +466,20 @@ function connect(session, options = {}) {
           content.dataset.renderedRaw = raw;
         }
         state.draftNode = null;
-        if (shouldScroll) scrollMessageToStart(row);
+        if (shouldScroll) scrollTranscriptToBottom();
         else transcript.scrollTop = transcript.scrollHeight - beforeBottom;
       } else {
-        const row = appendMessage('twag', event.text || '', '', { forceScroll: false });
-        if (shouldScroll) scrollMessageToStart(row);
+        appendMessage('twag', event.text || '', '', { forceScroll: false });
       }
       const tokenLine = event.usage?.total_tokens ? `\nTokens: ${event.usage.total_tokens}` : '';
       appendStatus(`Done. Duration: ${event.duration_ms || 0}ms${tokenLine}`);
-      setTurnStatus(`Done. Duration: ${event.duration_ms || 0}ms`, 'done');
     } else if (event.type === 'error') {
       clearDraft();
       state.inFlightPrompt = '';
       setConnection('error');
-      appendStatus(event.error || 'Unknown error.');
-      setTurnStatus(`Stopped: ${event.error || 'unknown error'}`, 'error');
-      appendMessage('system', `Error: ${event.error || 'unknown error'}`);
+      const summary = errorSummary(event);
+      appendStatus(summary);
+      appendMessage('system', event.error || 'Unknown error.');
     }
   });
 
@@ -517,7 +493,7 @@ function connect(session, options = {}) {
     }
     setConnection('closed');
     restoreInFlightPrompt();
-    if (state.inFlightPrompt) setTurnStatus('Disconnected before this query finished.', 'error');
+    if (state.inFlightPrompt) appendStatus('Disconnected before this query finished.');
     appendStatus('Disconnected. Use reconnect, then send again.');
   });
 
@@ -525,7 +501,7 @@ function connect(session, options = {}) {
     if (state.socket !== socket) return;
     setConnection('error');
     restoreInFlightPrompt();
-    if (state.inFlightPrompt) setTurnStatus('Connection error before this query finished.', 'error');
+    if (state.inFlightPrompt) appendStatus('Connection error before this query finished.');
     appendStatus('Connection error. Use reconnect, then send again.');
   });
 }

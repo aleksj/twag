@@ -32,10 +32,10 @@ model and AI ops).
 |  | NY Tech Week | Boston Tech Week |
 | --- | --- | --- |
 | Bot: terminal | [Open terminal](https://data.flowers/tw/?city=nyc) | [Open terminal](https://data.flowers/tw/?city=boston) |
-| Bot: Telegram | [@Twagbot](https://t.me/Twagbot) | [@TwagBostonBot](https://t.me/TwagBostonBot) |
-| Bot: Telegram QR | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> |
 | Gallery | [Browse gallery](https://natea.github.io/twag/events_gallery_nyc.html) | [Browse gallery](https://natea.github.io/twag/events_gallery_boston.html) |
 | Map | [Open map](https://natea.github.io/twag/events_map_nyc.html) | [Open map](https://natea.github.io/twag/events_map_boston.html) |
+| Bot: Telegram | [@Twagbot](https://t.me/Twagbot) | [@TwagBostonBot](https://t.me/TwagBostonBot) |
+| Bot: Telegram QR | <img src="docs/assets/twagbot-qr.png" alt="QR code for @Twagbot" width="140"> | <img src="docs/assets/twagbostonbot-qr.png" alt="QR code for @TwagBostonBot" width="140"> |
 
 The browser terminal is the web alternative to Telegram. It supports `/city nyc`,
 `/city boston`, `/map`, `/help`, and follow-up requests like `more`.
@@ -372,6 +372,12 @@ The browser terminal keeps lightweight session snapshots in
 `TWAG_TERMINAL_SESSION_DIR` so follow-up commands such as `more` can survive a
 backend restart. The default deployed path is
 `/var/log/twag/terminal-sessions`.
+
+Set `TWAG_PUBLIC_TERMINAL_BASE_URL` to the public terminal backend URL, for
+example `https://data.flowers/tw/terminal`. Filtered terminal search-result
+maps remain disabled by default with `TWAG_TERMINAL_RESULT_MAPS_ENABLED=false`
+until the canonical static map pages support loading a filtered GeoJSON via
+`result_url`.
 
 Useful logs:
 

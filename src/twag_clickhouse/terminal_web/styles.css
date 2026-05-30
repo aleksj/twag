@@ -226,28 +226,6 @@ h1 {
   color: var(--danger);
 }
 
-.message.turn-status {
-  border-bottom-color: rgba(240, 193, 90, 0.35);
-}
-
-.message.turn-status .role {
-  color: var(--accent);
-}
-
-.message.turn-status .content {
-  color: var(--accent);
-}
-
-.message.turn-status[data-turn-state="done"] .role,
-.message.turn-status[data-turn-state="done"] .content {
-  color: var(--ok);
-}
-
-.message.turn-status[data-turn-state="error"] .role,
-.message.turn-status[data-turn-state="error"] .content {
-  color: var(--danger);
-}
-
 .content {
   overflow-wrap: anywhere;
   white-space: pre-wrap;

@@ -21,7 +21,7 @@ uv run python scripts/build_terminal_static.py \
   --asset-base "." \
   --clean
 
-rsync -az --delete --chmod=D755,F644 \
+rsync -az --delete \
   -e "ssh -p $STATIC_REMOTE_SSH_PORT" \
   "$BUILD_DIR/" "$STATIC_REMOTE:$STATIC_REMOTE_DIR/"
 
