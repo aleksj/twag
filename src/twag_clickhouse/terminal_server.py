@@ -218,7 +218,10 @@ class LazySessionAgent:
 
     def ask(self, *args: Any, **kwargs: Any) -> str:
         kwargs.setdefault("max_turns", terminal_agent_max_turns())
-        kwargs.setdefault("enable_thinking", terminal_agent_enable_thinking())
+        kwargs.setdefault(
+            "enable_thinking",
+            self.session.state.verbose or terminal_agent_enable_thinking(),
+        )
         return _session_agent(self.session).ask(*args, **kwargs)
 
 

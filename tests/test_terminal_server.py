@@ -145,6 +145,7 @@ def test_answer_in_thread_emits_folded_thinking_stream_in_verbose_terminal_mode(
 
     class Agent:
         def ask(self, question, **kwargs):
+            assert kwargs.get("enable_thinking") is True
             kwargs["raw_stream_callback"]("<think>plan</think>")
             return "Answer"
 

@@ -17,14 +17,17 @@ from twag_clickhouse.subconscious_agent import (
     expanded_keyword_terms,
     extract_embedded_tool_calls,
     format_event_rows,
+    infer_event_query_date,
     is_more_results_request,
     likely_event_list_question,
     likely_nytw_data_question,
     looks_like_planning_leak,
     merge_continued_text,
+    placeholder_output_detected,
     response_was_truncated,
     requested_event_limit,
     validate_nytw_query,
+    verified_answer_or_placeholder_warning,
     visible_stream_content,
     wants_open_rsvps,
 )
@@ -93,6 +96,18 @@ def test_system_prompt_includes_current_local_date_context() -> None:
     assert "Current local datetime: 2026-05-25 20:49:00 EDT" in prompt
     assert "Dataset event date range: May 24-31, 2026" in prompt
     assert 'Interpret relative dates like "today", "tomorrow"' in prompt
+    assert "Placeholder content is invalid" in prompt
+    assert "morning is 05:00-11:59" in prompt
+
+
+def test_placeholder_output_is_rejected() -> None:
+    answer = (
+        "**Startup Networking Mixer** — June 2, 2026 — Chelsea — "
+        "[RSVP](https://example.com/rsvp1)"
+    )
+
+    assert placeholder_output_detected(answer)
+    assert "could not verify" in verified_answer_or_placeholder_warning(answer)
 
 
 def test_response_was_truncated_detects_length_finish_reason() -> None:
@@ -164,6 +179,24 @@ def test_build_keyword_event_query_filters_open_rsvps_without_polluting_keywords
     assert "cybersecurity" in sql
     assert "%open%" not in sql
     assert "%rsvps%" not in sql
+
+
+def test_build_keyword_event_query_hard_filters_neighborhood_weekday_and_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-30")
+
+    sql = build_keyword_event_query("events in east village on tuesday morning")
+
+    assert infer_event_query_date("events in east village on tuesday morning") == "2026-06-02"
+    assert "event_date = '2026-06-02'" in sql
+    assert "neighborhood ILIKE '%east village%'" in sql
+    assert "toHour(start_at) >= 5 AND toHour(start_at) < 12" in sql
+    assert "%east%" not in sql
+    assert "%village%" not in sql
+    assert "%tuesday%" not in sql
+    assert "%morning%" not in sql
+    assert "ORDER BY event_date ASC, start_at ASC, title ASC" in sql
 
 
 def test_expanded_keyword_terms_handles_running() -> None:

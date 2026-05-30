@@ -8,7 +8,7 @@ from html import unescape
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -107,6 +107,53 @@ RSVP_LINK_PHRASE_PATTERN = re.compile(
     r"\b(?:with\s+)?rsvp\s+links?\b|\brsvp\s+urls?\b",
     re.IGNORECASE,
 )
+ISO_DATE_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+MONTH_DAY_PATTERN = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+(\d{1,2})\b",
+    re.IGNORECASE,
+)
+MONTH_NUM = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+RELATIVE_DATE_PATTERN = re.compile(
+    r"\b(today|tonight|tomorrow|this\s+(?:morning|afternoon|evening))\b",
+    re.IGNORECASE,
+)
+WEEKDAY_PATTERN = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE,
+)
+WEEKDAY_NUM = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+TIME_OF_DAY_PATTERN = re.compile(
+    r"\b(morning|afternoon|evening|tonight|night)\b",
+    re.IGNORECASE,
+)
+PLACEHOLDER_OUTPUT_PATTERN = re.compile(
+    r"https?://(?:www\.)?example\.com\b|"
+    r"\b(?:placeholder|sample)\s+(?:event|rsvp|url|link)\b|"
+    r"\brsvp\d+\b",
+    re.IGNORECASE,
+)
 
 _SYSTEM_PROMPT_TEMPLATE = """
 You are {agent_name}, a data analyst for the {display_name}
@@ -123,10 +170,20 @@ Interpret relative dates like "today", "tomorrow", "tonight", "this morning",
 relative date falls inside the dataset range, query that concrete date instead
 of asking the user to clarify. Use event_date for dates and start_at/start_time
 for time-of-day filters like morning, afternoon, evening, or tonight.
+For weekday requests, compute the next matching weekday from the current local
+date. For neighborhood requests such as "East Village", "SoHo", "Cambridge",
+or "Upper West Side", use a hard neighborhood/venue/address filter; do not
+treat the neighborhood words as only loose ranking terms. For time windows use
+start_at: morning is 05:00-11:59, afternoon is 12:00-16:59, and evening/tonight
+is 17:00 or later.
 
 Use the {tool_name} tool whenever the user asks for facts, counts,
 rankings, filtering, recommendations, or analysis that depends on the data.
 Do not invent event data. Query the database first, then answer from the rows.
+Placeholder content is invalid: never output example.com links, fake RSVP URLs
+such as rsvp1, sample event titles, invented venues, or fabricated dates. If
+the rows do not contain a real event or URL, say that the data does not verify
+the requested item.
 
 Available ClickHouse tables:
 
@@ -416,6 +473,20 @@ def clean_model_answer(content: str) -> str:
     return content.strip()
 
 
+def placeholder_output_detected(content: str) -> bool:
+    return bool(PLACEHOLDER_OUTPUT_PATTERN.search(content or ""))
+
+
+def verified_answer_or_placeholder_warning(content: str) -> str:
+    answer = clean_model_answer(content)
+    if placeholder_output_detected(answer):
+        return (
+            "I could not verify that answer from the event data. "
+            "Please try a narrower event query with a date, neighborhood, topic, or host."
+        )
+    return answer
+
+
 def visible_stream_content(content: str) -> str:
     if "</think>" in content:
         return content.rsplit("</think>", 1)[-1]
@@ -588,6 +659,13 @@ def wants_open_rsvps(question: str) -> bool:
 def event_search_text(question: str) -> str:
     text = OPEN_RSVP_PATTERN.sub(" ", question)
     text = RSVP_LINK_PHRASE_PATTERN.sub(" ", text)
+    city = active_city()
+    text = _location_pattern(city.neighborhoods_regex).sub(" ", text)
+    text = ISO_DATE_PATTERN.sub(" ", text)
+    text = MONTH_DAY_PATTERN.sub(" ", text)
+    text = RELATIVE_DATE_PATTERN.sub(" ", text)
+    text = WEEKDAY_PATTERN.sub(" ", text)
+    text = TIME_OF_DAY_PATTERN.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -655,15 +733,86 @@ def _clickhouse_array(values: list[str]) -> str:
     return "[" + ", ".join(_clickhouse_string(value) for value in values) + "]"
 
 
+def _event_query_base_date(city: CityConfig) -> date:
+    override = os.getenv("TWAG_CURRENT_DATE", "").strip()
+    if override:
+        try:
+            return date.fromisoformat(override)
+        except ValueError:
+            pass
+    return current_city_datetime(city).date()
+
+
+def infer_event_query_date(question: str, city: CityConfig | None = None) -> str:
+    city = city or active_city()
+    iso = ISO_DATE_PATTERN.search(question)
+    if iso:
+        return iso.group(1)
+
+    base_date = _event_query_base_date(city)
+    relative = RELATIVE_DATE_PATTERN.search(question)
+    if relative:
+        phrase = relative.group(1).lower()
+        if phrase == "tomorrow":
+            return (base_date + timedelta(days=1)).isoformat()
+        return base_date.isoformat()
+
+    weekday = WEEKDAY_PATTERN.search(question)
+    if weekday:
+        target = WEEKDAY_NUM[weekday.group(1).lower()]
+        delta = (target - base_date.weekday()) % 7
+        return (base_date + timedelta(days=delta)).isoformat()
+
+    md = MONTH_DAY_PATTERN.search(question)
+    if md:
+        month = MONTH_NUM.get(md.group(1).lower()[:3])
+        day = int(md.group(2))
+        if month:
+            year = int(city.default_map_date.split("-", 1)[0])
+            return f"{year:04d}-{month:02d}-{day:02d}"
+
+    return ""
+
+
+def infer_event_query_neighborhood(question: str, city: CityConfig | None = None) -> str:
+    city = city or active_city()
+    match = _location_pattern(city.neighborhoods_regex).search(question)
+    if not match:
+        return ""
+    value = re.sub(r"\s+", " ", match.group(1).strip().lower())
+    aliases = {
+        "uws": "upper west side",
+        "ues": "upper east side",
+    }
+    return aliases.get(value, value)
+
+
+def infer_event_query_time_filter(question: str) -> str:
+    match = TIME_OF_DAY_PATTERN.search(question)
+    if not match:
+        return ""
+    value = match.group(1).lower()
+    if value == "morning":
+        return "(toHour(start_at) >= 5 AND toHour(start_at) < 12)"
+    if value == "afternoon":
+        return "(toHour(start_at) >= 12 AND toHour(start_at) < 17)"
+    return "toHour(start_at) >= 17"
+
+
 def build_keyword_event_query(
     question: str,
     *,
     limit: int | None = None,
     offset: int = 0,
 ) -> str:
+    city = active_city()
     terms = expanded_keyword_terms(question)
     limit = requested_event_limit(question) if limit is None else limit
-    if not terms:
+    date_filter = infer_event_query_date(question, city)
+    neighborhood_filter = infer_event_query_neighborhood(question, city)
+    time_filter = infer_event_query_time_filter(question)
+    has_structured_filters = bool(date_filter or neighborhood_filter or time_filter)
+    if not terms and not has_structured_filters:
         terms = ["ai", "agent"]
 
     phrase = " ".join(keyword_terms(question))
@@ -676,6 +825,21 @@ def build_keyword_event_query(
   AND NOT at_capacity
   AND (remaining_capacity IS NULL OR remaining_capacity > 0)
 """.rstrip()
+    structured_filters = []
+    if date_filter:
+        structured_filters.append(f"  AND event_date = {_clickhouse_string(date_filter)}")
+    if neighborhood_filter:
+        pattern = _clickhouse_string(f"%{neighborhood_filter}%")
+        structured_filters.append(
+            "  AND ("
+            f"neighborhood ILIKE {pattern} OR "
+            f"venue_name ILIKE {pattern} OR "
+            f"venue_address ILIKE {pattern}"
+            ")"
+        )
+    if time_filter:
+        structured_filters.append(f"  AND {time_filter}")
+    structured_filter_sql = "\n".join(structured_filters)
     conditions = []
     score_parts = []
     for term in terms:
@@ -697,8 +861,14 @@ def build_keyword_event_query(
             "0)"
         )
 
-    score = " + ".join(score_parts)
+    score = " + ".join(score_parts) if score_parts else "0"
     where = " OR ".join(conditions)
+    term_predicate = f"term_overlap > 0\n  OR ({where})" if where else "1"
+    order_by = (
+        "relevance_score DESC, coalesce(going_guest_count, 0) DESC"
+        if terms
+        else "event_date ASC, start_at ASC, title ASC"
+    )
     return f"""
 WITH
   {terms_array} AS query_terms,
@@ -745,11 +915,11 @@ FROM {active_city().table_prefix}_current_events
 WHERE fetch_status = 'ok'
   AND NOT canceled
 {availability_filter}
+{structured_filter_sql}
 )
 )
-WHERE term_overlap > 0
-  OR ({where})
-ORDER BY relevance_score DESC, coalesce(going_guest_count, 0) DESC
+WHERE {term_predicate}
+ORDER BY {order_by}
 LIMIT {limit}
 {f"OFFSET {offset}" if offset else ""}
 """.strip()
@@ -904,6 +1074,11 @@ class NytwSubconsciousAgent:
                 offset=event_offset,
             )
             self.last_sql_queries.append(sql)
+            if raw_stream_callback and enable_thinking:
+                raw_stream_callback(
+                    "Deterministic event search selected.\n\n"
+                    f"{sql}\n"
+                )
             result = self._query_sql(sql, compact=False)
             if result.get("ok"):
                 self.last_event_map_rows = list((result.get("rows") or [])[:page_size])
@@ -968,7 +1143,7 @@ class NytwSubconsciousAgent:
                 if truncated:
                     messages.append({"role": "user", "content": CONTINUE_TRUNCATED_PROMPT})
                     continue
-                return clean_model_answer("".join(response_parts))
+                return verified_answer_or_placeholder_warning("".join(response_parts))
 
             for tool_call in tool_calls:
                 if progress_callback:
@@ -1005,7 +1180,7 @@ class NytwSubconsciousAgent:
                         messages,
                         stream_callback=stream_callback,
                         raw_stream_callback=raw_stream_callback,
-                        enable_thinking=False,
+                        enable_thinking=enable_thinking,
                     )
                 else:
                     response = self._chat(messages, enable_thinking=False)
@@ -1038,7 +1213,7 @@ class NytwSubconsciousAgent:
                 final_response_parts = [
                     merge_continued_text("".join(final_response_parts), content)
                 ]
-                return clean_model_answer("".join(final_response_parts))
+                return verified_answer_or_placeholder_warning("".join(final_response_parts))
             raise RuntimeError("Agent final answer did not finish within max_turns")
 
         raise RuntimeError("Agent did not finish within max_turns")
