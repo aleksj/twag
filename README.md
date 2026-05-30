@@ -13,21 +13,18 @@ agent can answer from live data instead of guessing.
 No setup is needed to try it. Use the browser terminal or open the Telegram bot
 for the city you care about.
 
-Sponsored by [data.flowers](https://data.flowers/) and
-[Subconscious](https://www.subconscious.dev/).
+Sponsored by [data.flowers](https://data.flowers/) (data, hosting, and
+engineering) and [Subconscious](https://www.subconscious.dev/) (custom LLM
+model and AI ops).
 
 ## Credits
 
-- **[Stage 11 Agentics](https://github.com/Stage-11-Agentics/nytw-2026-for-agents)**
-  inspired the project with the original agent-friendly NY Tech Week dataset.
-  TWAG builds on that idea as a broader, multi-city, user-facing fork and
-  deployment.
 - **[Atin Woodard from Stage11](https://github.com/Stage-11-Agentics/)**
-  started the agent-friendly NY Tech Week database.
+  created the agent-friendly NY Tech Week database.
 - **[Aleks Jakulin from data.flowers](https://jakul.in)** built the end-user
   AI/data product, wiring ClickHouse, Telegram, data sync, deployment, and
   production hardening pieces together.
-- **[Nate Aune](https://github.com/natea)** pushed the multi-city direction by
+- **[Nate Aune](https://github.com/natea)** lead in the multi-city direction by
   adding support for Boston and creating the static map and gallery navigation.
 
 ## Try It
