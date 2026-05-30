@@ -13,6 +13,7 @@ from twag_clickhouse.terminal_server import (
     _answer_in_thread,
     _get_session,
     _handle_user_message,
+    _set_session_mode,
     _sessions,
     _states,
     app,
@@ -20,6 +21,7 @@ from twag_clickhouse.terminal_server import (
     create_session,
     terminal_token_is_valid,
     health,
+    mode_event,
     ready_event,
     root,
     terminal_asset,
@@ -75,10 +77,43 @@ def test_ready_event_includes_city_specific_telegram_greeting() -> None:
     assert event["type"] == "ready"
     assert event["city"] == "boston"
     assert set(event["backend_status"]) == {"clickhouse", "subconscious"}
+    assert event["thinking"] is False
     assert "**TWAG Boston Tech Week Bot**" in event["greeting"]
     assert "**Sponsored by Data.Flowers**" in event["greeting"]
     assert "List AI events in Cambridge" in event["greeting"]
     assert "Use concrete criteria" in event["greeting"]
+
+
+def test_mode_event_reflects_terminal_thinking_state() -> None:
+    session = TerminalSession(session_id="mode-session", city="nyc")
+
+    assert mode_event(session)["thinking"] is False
+    session.state.verbose = True
+    assert mode_event(session)["thinking"] is True
+
+
+@pytest.mark.anyio
+async def test_set_session_mode_persists_thinking_state(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_TERMINAL_SESSION_DIR", str(tmp_path))
+
+    class WebSocket:
+        def __init__(self) -> None:
+            self.events = []
+
+        async def send_json(self, event):
+            self.events.append(event)
+
+    session = TerminalSession(session_id="mode-persist-session", city="nyc")
+    websocket = WebSocket()
+
+    await _set_session_mode(websocket, session, {"thinking": True})
+
+    assert session.state.verbose is True
+    assert websocket.events[-1]["type"] == "mode"
+    assert websocket.events[-1]["thinking"] is True
+    _sessions.pop(session.session_id, None)
+    _states.pop(session.session_id, None)
+    assert _get_session(session.session_id).state.verbose is True  # type: ignore[union-attr]
 
 
 def test_terminal_operator_token_is_optional_by_default(monkeypatch) -> None:
@@ -292,6 +327,27 @@ def test_answer_in_thread_uses_terminal_agent_turn_limit(monkeypatch) -> None:
     _answer_in_thread(session, "how many events in soho?", events.append)
 
     assert agent.max_turns == 17
+    assert agent.enable_thinking is False
+
+
+def test_terminal_thinking_env_does_not_override_browser_mode(monkeypatch) -> None:
+    monkeypatch.setenv("TWAG_TERMINAL_ENABLE_THINKING", "true")
+    monkeypatch.delenv("TWAG_PUBLIC_MAP_BASE_URL", raising=False)
+
+    class Agent:
+        def __init__(self) -> None:
+            self.enable_thinking = None
+
+        def ask(self, question, **kwargs):
+            self.enable_thinking = kwargs.get("enable_thinking")
+            return f"answered {question}"
+
+    agent = Agent()
+    session = TerminalSession(session_id="env-thinking-session", city="nyc", agent=agent)  # type: ignore[arg-type]
+    events = []
+
+    _answer_in_thread(session, "how many events in soho?", events.append)
+
     assert agent.enable_thinking is False
 
 

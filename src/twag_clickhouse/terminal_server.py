@@ -109,11 +109,6 @@ def terminal_agent_max_turns() -> int:
         return 4
 
 
-def terminal_agent_enable_thinking() -> bool:
-    raw = os.getenv("TWAG_TERMINAL_ENABLE_THINKING", "false").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
 def _env_float(name: str, default: float, *, minimum: float) -> float:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -175,6 +170,8 @@ def terminal_status_step(step: str) -> str | None:
         return None
     if step.startswith("Preparing a ranked event search"):
         return "Searching events by topic, venue, host, and location."
+    if step == "Checking recent event sync changes.":
+        return step
     if step.startswith("Expanded search terms:"):
         return None
     if step.startswith("Building a ranked event query"):
@@ -218,10 +215,7 @@ class LazySessionAgent:
 
     def ask(self, *args: Any, **kwargs: Any) -> str:
         kwargs.setdefault("max_turns", terminal_agent_max_turns())
-        kwargs.setdefault(
-            "enable_thinking",
-            self.session.state.verbose or terminal_agent_enable_thinking(),
-        )
+        kwargs.setdefault("enable_thinking", self.session.state.verbose)
         return _session_agent(self.session).ask(*args, **kwargs)
 
 
@@ -642,8 +636,17 @@ def ready_event(session: TerminalSession) -> dict[str, Any]:
         "session_id": session.session_id,
         "city": session.city,
         "verbose": session.state.verbose,
+        "thinking": session.state.verbose,
         "greeting": greeting,
         "backend_status": session.backend_status,
+    }
+
+
+def mode_event(session: TerminalSession) -> dict[str, Any]:
+    return {
+        "type": "mode",
+        "thinking": session.state.verbose,
+        "verbose": session.state.verbose,
     }
 
 
@@ -790,6 +793,9 @@ async def _websocket_session(websocket: WebSocket, session_id: str) -> None:
             if message_type == "set_city":
                 await _set_session_city(websocket, session, str(payload.get("city") or ""))
                 continue
+            if message_type == "set_mode":
+                await _set_session_mode(websocket, session, payload)
+                continue
             if message_type == "ping":
                 await websocket.send_json({"type": "pong", "time": time.time()})
                 continue
@@ -825,6 +831,17 @@ async def _set_session_city(
             "message": f"Switched to {city.short_name}.",
         }
     )
+    await websocket.send_json(mode_event(session))
+
+
+async def _set_session_mode(
+    websocket: WebSocket,
+    session: TerminalSession,
+    payload: dict[str, Any],
+) -> None:
+    session.state.verbose = bool(payload.get("thinking"))
+    _save_session(session)
+    await websocket.send_json(mode_event(session))
 
 
 async def _handle_user_message(

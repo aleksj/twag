@@ -17,6 +17,9 @@ def test_terminal_index_uses_content_hashed_asset_urls() -> None:
 
     assert f'/terminal/app.js?v={versions["app.js"]}' in html
     assert f'/terminal/styles.css?v={versions["styles.css"]}' in html
+    assert 'id="thinkingToggle"' in html
+    assert 'data-command="/verbose"' not in html
+    assert 'data-command="/quiet"' not in html
     assert "__TWAG_TERMINAL_" not in html
     assert "202605" not in html
 

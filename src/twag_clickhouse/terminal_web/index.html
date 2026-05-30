@@ -28,8 +28,10 @@
           <div class="command-grid">
             <button type="button" data-command="/city nyc">NYC</button>
             <button type="button" data-command="/city boston">Boston</button>
-            <button type="button" data-command="/verbose">Verbose</button>
-            <button type="button" data-command="/quiet">Quiet</button>
+            <label class="mode-switch" title="Show folded agent thinking for future queries">
+              <input id="thinkingToggle" type="checkbox">
+              <span>Thinking</span>
+            </label>
             <button type="button" data-command="/map">Map</button>
             <button type="button" data-command="/help">Help</button>
           </div>

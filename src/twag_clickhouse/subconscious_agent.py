@@ -46,7 +46,7 @@ LIMIT_PATTERN = re.compile(r"\blimit\b", re.IGNORECASE)
 def _agent_table_pattern(prefix: str) -> re.Pattern[str]:
     return re.compile(
         rf"\b("
-        rf"{prefix}_(current_events|current_manifest|calendar_events|calendar_manifest|events|hosts|event_hosts|manifest)|"
+        rf"{prefix}_(current_events|current_manifest|calendar_events|calendar_manifest|events|hosts|event_hosts|manifest|sync_changes)|"
         r"senso_(kb_nodes|kb_documents|kb_chunks|sync_runs)"
         r")\b",
         re.IGNORECASE,
@@ -90,6 +90,15 @@ EVENT_LOCATION_SEARCH_PATTERN = re.compile(
     r"\bevents?\b.*\b(in|near|around|at)\b|\b(in|near|around|at)\b.*\bevents?\b",
     re.IGNORECASE,
 )
+EVENT_CHANGE_PATTERN = re.compile(
+    r"\b("
+    r"what(?:'s|\s+has)?\s+changed|changes?|changed|"
+    r"new\s+events?|events?\s+added|added\s+events?|"
+    r"events?\s+updated|updated\s+events?|"
+    r"events?\s+(?:removed|canceled|cancelled)|(?:removed|canceled|cancelled)\s+events?"
+    r")\b",
+    re.IGNORECASE,
+)
 COUNT_PATTERN = re.compile(r"\b(how many|count|total|number of)\b", re.IGNORECASE)
 MORE_RESULTS_PATTERN = re.compile(
     r"^\s*(more|next|show more|more results|next results|continue)\s*$",
@@ -128,9 +137,10 @@ MONTH_NUM = {
     "dec": 12,
 }
 RELATIVE_DATE_PATTERN = re.compile(
-    r"\b(today|tonight|tomorrow|this\s+(?:morning|afternoon|evening))\b",
+    r"\b(today|tonight|yesterday|tomorrow|this\s+(?:morning|afternoon|evening))\b",
     re.IGNORECASE,
 )
+LAST_N_DAYS_PATTERN = re.compile(r"\blast\s+(\d{1,2})\s+days?\b", re.IGNORECASE)
 WEEKDAY_PATTERN = re.compile(
     r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
     re.IGNORECASE,
@@ -265,6 +275,10 @@ Available ClickHouse tables:
 
 {prefix}_current_manifest:
 - event_id, url, title, host, date_time, neighborhood, badges, source, raw_json
+
+{prefix}_sync_changes:
+- run_id, city_slug, table_name, change_type, record_id, title
+- changed_fields, previous_hash, content_hash, previous_json, content_json, synced_at
 
 senso_kb_nodes:
 - kb_node_id, parent_id, path, name, node_type, content_id, version
@@ -701,6 +715,10 @@ def likely_event_list_question(question: str) -> bool:
     )
 
 
+def likely_event_change_question(question: str) -> bool:
+    return bool(EVENT_CHANGE_PATTERN.search(question))
+
+
 def likely_nytw_data_question(question: str) -> bool:
     if NYTW_EXPLICIT_PATTERN.search(question):
         return True
@@ -775,6 +793,13 @@ def expanded_keyword_terms(question: str) -> list[str]:
     expansions = {
         "running": ["running", "run", "runs", "runner", "runners", "5k", "jog"],
         "run": ["run", "running", "runs", "runner", "runners", "5k", "jog"],
+        "hacker": ["hacker", "hackers", "hackathon", "hacking", "security", "cybersecurity"],
+        "hackers": ["hackers", "hacker", "hackathon", "hacking", "security", "cybersecurity"],
+        "hacking": ["hacking", "hacker", "hackers", "hackathon", "security", "cybersecurity"],
+        "hackathon": ["hackathon", "hacker", "hackers", "hacking", "buildathon"],
+        "cyber": ["cyber", "cybersecurity", "security", "infosec", "hacker", "hackers"],
+        "cybersecurity": ["cybersecurity", "security", "infosec", "hacker", "hackers"],
+        "security": ["security", "cybersecurity", "infosec", "hacker", "hackers"],
         "agents": ["agents", "agent", "agentic", "autonomous", "orchestration"],
         "agent": ["agent", "agents", "agentic", "autonomous", "orchestration"],
         "orcheastration": ["orchestration", "orchestrate", "orchestrating"],
@@ -835,6 +860,8 @@ def infer_event_query_date(question: str, city: CityConfig | None = None) -> str
         phrase = relative.group(1).lower()
         if phrase == "tomorrow":
             return (base_date + timedelta(days=1)).isoformat()
+        if phrase == "yesterday":
+            return (base_date - timedelta(days=1)).isoformat()
         return base_date.isoformat()
 
     weekday = WEEKDAY_PATTERN.search(question)
@@ -1008,6 +1035,101 @@ LIMIT {limit}
 """.strip()
 
 
+def infer_change_query_since_date(question: str, city: CityConfig | None = None) -> str:
+    city = city or active_city()
+    base_date = _event_query_base_date(city)
+    last_n = LAST_N_DAYS_PATTERN.search(question)
+    if last_n:
+        return (base_date - timedelta(days=max(1, int(last_n.group(1))))).isoformat()
+    inferred = infer_event_query_date(question, city)
+    if inferred:
+        return inferred
+    return (base_date - timedelta(days=1)).isoformat()
+
+
+def change_type_filter(question: str) -> str:
+    lowered = question.lower()
+    if re.search(r"\b(new|added|inserted)\b", lowered):
+        return "  AND change_type = 'inserted'"
+    if re.search(r"\b(updated|modified)\b", lowered):
+        return "  AND change_type = 'updated'"
+    if re.search(r"\b(removed|canceled|cancelled)\b", lowered):
+        return (
+            "  AND (change_type = 'removed' OR has(changed_fields, 'canceled') "
+            "OR has(changed_fields, 'canceled_at'))"
+        )
+    return "  AND change_type IN ('inserted', 'updated', 'removed')"
+
+
+def build_event_change_query(
+    question: str,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> str:
+    city = active_city()
+    limit = requested_event_limit(question) if limit is None else limit
+    since_date = infer_change_query_since_date(question, city)
+    since_sql = _clickhouse_string(f"{since_date} 00:00:00")
+    table_name = _clickhouse_string(f"{city.table_prefix}_events")
+    return f"""
+SELECT
+  record_id AS event_id,
+  title,
+  change_type,
+  changed_fields,
+  synced_at,
+  count() OVER () AS total_matches
+FROM {city.table_prefix}_sync_changes
+WHERE table_name = {table_name}
+  AND synced_at >= toDateTime64({since_sql}, 3, 'UTC')
+{change_type_filter(question)}
+ORDER BY synced_at DESC, title ASC
+LIMIT {limit}
+{f"OFFSET {offset}" if offset else ""}
+""".strip()
+
+
+def format_event_change_rows(
+    result: dict[str, Any],
+    *,
+    since_date: str,
+    offset: int = 0,
+) -> str:
+    if not result.get("ok"):
+        return f"Query failed: {result.get('error', 'unknown error')}"
+
+    rows = result.get("rows") or []
+    if not rows:
+        return f"No event changes found since {since_date}."
+
+    total_matches = _total_matches_from_rows(rows)
+    lines = []
+    if total_matches is not None:
+        start = offset + 1
+        end = offset + len(rows)
+        noun = "change" if total_matches == 1 else "changes"
+        lines.append(f"Showing {start}-{end} of {total_matches} event {noun} since {since_date}.")
+
+    labels = {
+        "inserted": "added",
+        "updated": "updated",
+        "removed": "removed",
+    }
+    for row in rows:
+        title = row.get("title") or row.get("event_id") or "Untitled event"
+        change_type = labels.get(str(row.get("change_type") or ""), str(row.get("change_type") or "changed"))
+        changed_fields = row.get("changed_fields") or []
+        if isinstance(changed_fields, list) and changed_fields:
+            detail = ", ".join(str(field) for field in changed_fields[:6])
+        else:
+            detail = "event row"
+        synced_at = str(row.get("synced_at") or "sync time unknown")
+        lines.append(f"**{title}** — {change_type} — {detail} — {synced_at}")
+
+    return "\n\n".join(lines)
+
+
 def compact_text(value: Any, *, max_chars: int = 130) -> str:
     text = unescape(str(value or ""))
     text = re.sub(r"https?://\S+", "", text)
@@ -1140,6 +1262,20 @@ class NytwSubconsciousAgent:
             )
         messages.append({"role": "user", "content": question})
         response_parts: list[str] = []
+
+        if likely_event_change_question(question):
+            if progress_callback:
+                progress_callback("Checking recent event sync changes.")
+            sql = build_event_change_query(question, limit=requested_event_limit(question), offset=event_offset)
+            self.last_sql_queries.append(sql)
+            if raw_stream_callback and enable_thinking:
+                raw_stream_callback(
+                    "Deterministic event change search selected.\n\n"
+                    f"{sql}\n"
+                )
+            result = self._query_sql(sql, compact=False)
+            since_date = infer_change_query_since_date(question, city)
+            return format_event_change_rows(result, since_date=since_date, offset=event_offset)
 
         if likely_event_list_question(question):
             page_size = requested_event_limit(question)

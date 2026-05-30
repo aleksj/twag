@@ -6,6 +6,7 @@ const backendState = document.querySelector('#backendState');
 const cityState = document.querySelector('#cityState');
 const promptForm = document.querySelector('#promptForm');
 const promptInput = document.querySelector('#promptInput');
+const thinkingToggle = document.querySelector('#thinkingToggle');
 const commandButtons = document.querySelectorAll('[data-command]');
 
 const state = {
@@ -21,6 +22,7 @@ const state = {
   lastStatusLine: '',
   lastBackendLine: '',
   inFlightPrompt: '',
+  thinking: false,
 };
 
 const appBasePath = new URL('.', window.location.href).pathname;
@@ -43,6 +45,17 @@ function setConnection(value) {
 function setCity(city) {
   state.city = city || state.city;
   cityState.textContent = `city: ${state.city || '--'}`;
+}
+
+function setThinkingMode(value) {
+  state.thinking = Boolean(value);
+  if (thinkingToggle) {
+    thinkingToggle.checked = state.thinking;
+    thinkingToggle.closest('.mode-switch')?.setAttribute(
+      'aria-label',
+      state.thinking ? 'Thinking stream on' : 'Thinking stream off',
+    );
+  }
 }
 
 function serviceShortState(value) {
@@ -497,6 +510,7 @@ function connect(session, options = {}) {
       socket.twagReceivedReady = true;
       state.sessionId = event.session_id;
       setCity(event.city);
+      setThinkingMode(event.thinking ?? event.verbose);
       if (event.backend_status) setBackendStatus(event.backend_status);
       appendStatus(`Ready. Session: ${event.session_id}`);
       if (event.greeting && !state.greetingShown) {
@@ -507,6 +521,9 @@ function connect(session, options = {}) {
       setCity(event.city);
       appendStatus(event.message);
       appendMessage('system', event.message);
+    } else if (event.type === 'mode') {
+      setThinkingMode(event.thinking ?? event.verbose);
+      appendStatus(state.thinking ? 'Thinking stream enabled.' : 'Thinking stream disabled.');
     } else if (event.type === 'backend_status') {
       setBackendStatus(event.services || {});
     } else if (event.type === 'status') {
@@ -585,6 +602,14 @@ commandButtons.forEach((button) => {
     promptInput.focus();
     promptForm.requestSubmit();
   });
+});
+
+thinkingToggle?.addEventListener('change', () => {
+  const next = Boolean(thinkingToggle.checked);
+  setThinkingMode(next);
+  if (!send({ type: 'set_mode', thinking: next })) {
+    setThinkingMode(!next);
+  }
 });
 
 async function reconnect(options = {}) {

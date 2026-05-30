@@ -12,15 +12,19 @@ from twag_clickhouse.subconscious_agent import (
     SubconsciousConfig,
     UnsafeQueryError,
     add_default_limit,
+    build_event_change_query,
     build_system_prompt,
     build_keyword_event_query,
     clean_model_answer,
     expanded_keyword_terms,
     extract_embedded_tool_calls,
+    format_event_change_rows,
     format_event_rows,
+    infer_change_query_since_date,
     infer_event_query_date,
     infer_event_geo_entity,
     is_more_results_request,
+    likely_event_change_question,
     likely_event_list_question,
     likely_nytw_data_question,
     looks_like_planning_leak,
@@ -38,6 +42,14 @@ from twag_clickhouse.subconscious_agent import (
 def test_validate_nytw_query_accepts_read_only_nytw_select() -> None:
     sql = validate_nytw_query(
         "SELECT title FROM nytw_events WHERE fetch_status = 'ok' LIMIT 10"
+    )
+
+    assert sql.startswith("SELECT title")
+
+
+def test_validate_nytw_query_accepts_sync_changes_select() -> None:
+    sql = validate_nytw_query(
+        "SELECT title FROM nytw_sync_changes WHERE change_type = 'updated' LIMIT 10"
     )
 
     assert sql.startswith("SELECT title")
@@ -239,6 +251,59 @@ def test_expanded_keyword_terms_handles_running() -> None:
     assert "5k" in terms
 
 
+def test_expanded_keyword_terms_handles_hacker_queries() -> None:
+    terms = expanded_keyword_terms("hacker events")
+
+    assert terms[:3] == ["hacker", "hackers", "hackathon"]
+    assert "cybersecurity" in terms
+
+
+def test_event_change_query_uses_sync_changes_since_yesterday(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-30")
+
+    question = "what has changed from yesterday?"
+    sql = build_event_change_query(question)
+
+    assert likely_event_change_question(question)
+    assert infer_change_query_since_date(question) == "2026-05-29"
+    assert "FROM nytw_sync_changes" in sql
+    assert "table_name = 'nytw_events'" in sql
+    assert "synced_at >= toDateTime64('2026-05-29 00:00:00', 3, 'UTC')" in sql
+    assert "change_type IN ('inserted', 'updated', 'removed')" in sql
+
+
+def test_event_change_query_can_filter_added_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-30")
+
+    sql = build_event_change_query("events added in the last 3 days")
+
+    assert "change_type = 'inserted'" in sql
+    assert "2026-05-27 00:00:00" in sql
+    assert "LIMIT 25" in sql
+
+
+def test_format_event_change_rows_is_deterministic() -> None:
+    output = format_event_change_rows(
+        {
+            "ok": True,
+            "rows": [
+                {
+                    "event_id": "abc",
+                    "title": "New event",
+                    "change_type": "inserted",
+                    "changed_fields": ["title", "event_date"],
+                    "synced_at": "2026-05-30 01:02:03",
+                    "total_matches": 1,
+                }
+            ],
+        },
+        since_date="2026-05-29",
+    )
+
+    assert "Showing 1-1 of 1 event change since 2026-05-29." in output
+    assert "**New event** — added — title, event_date — 2026-05-30 01:02:03" in output
+
+
 def test_is_more_results_request() -> None:
     assert is_more_results_request("more")
     assert is_more_results_request("show more")
@@ -389,6 +454,40 @@ def test_agent_routes_plain_location_event_question_to_clickhouse() -> None:
     assert [row["event_id"] for row in agent.last_event_map_rows] == [
         f"event-{index}" for index in range(1, 26)
     ]
+
+
+def test_agent_routes_changed_since_yesterday_to_sync_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TWAG_CURRENT_DATE", "2026-05-30")
+
+    class ChangeClickHouse:
+        def __init__(self) -> None:
+            self.sql: str | None = None
+
+        def query(self, sql: str) -> list[dict[str, object]]:
+            self.sql = sql
+            return [
+                {
+                    "event_id": "event-1",
+                    "title": "Fresh event",
+                    "change_type": "inserted",
+                    "changed_fields": ["title"],
+                    "synced_at": "2026-05-30 02:00:00",
+                    "total_matches": 1,
+                }
+            ]
+
+    clickhouse = ChangeClickHouse()
+    agent = NytwSubconsciousAgent(
+        clickhouse=clickhouse,  # type: ignore[arg-type]
+        subconscious=SubconsciousConfig(api_key="test"),
+    )
+
+    answer = agent.ask("what has changed from yesterday?")
+
+    assert clickhouse.sql is not None
+    assert "FROM nytw_sync_changes" in clickhouse.sql
+    assert "2026-05-29 00:00:00" in clickhouse.sql
+    assert "Fresh event" in answer
 
 
 def test_agent_tool_query_compacts_large_rows() -> None:

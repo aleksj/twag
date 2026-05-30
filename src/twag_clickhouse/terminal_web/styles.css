@@ -173,6 +173,7 @@ h1 {
 }
 
 .command-grid button,
+.mode-switch,
 .prompt button {
   min-height: 38px;
   border: 1px solid var(--line);
@@ -182,11 +183,28 @@ h1 {
 }
 
 .command-grid button:hover,
+.mode-switch:hover,
 .prompt button:hover,
 .command-grid button:focus-visible,
+.mode-switch:focus-within,
 .prompt button:focus-visible {
   border-color: var(--accent);
   outline: none;
+}
+
+.mode-switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 10px;
+  user-select: none;
+}
+
+.mode-switch input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-2);
 }
 
 .terminal-pane {
@@ -382,7 +400,8 @@ h1 {
     display: none;
   }
 
-  .command-grid button {
+  .command-grid button,
+  .mode-switch {
     flex: 0 0 auto;
     min-height: 28px;
     padding: 0 9px;
